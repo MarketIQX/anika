@@ -1,0 +1,42 @@
+{% extends "base.html" %}
+{% block title %}Inbox · Anika{% endblock %}
+{% block content %}
+<h1 class="text-2xl font-semibold mb-4">Inbox history</h1>
+<div class="bg-white border border-slate-200 rounded-lg overflow-hidden">
+  <table class="w-full text-sm">
+    <thead class="bg-slate-100 text-slate-600 text-xs uppercase tracking-wide">
+      <tr>
+        <th class="text-left px-4 py-2">Received</th>
+        <th class="text-left px-4 py-2">From</th>
+        <th class="text-left px-4 py-2">Subject</th>
+        <th class="text-left px-4 py-2">Category</th>
+        <th class="text-left px-4 py-2">Draft</th>
+      </tr>
+    </thead>
+    <tbody class="divide-y">
+      {% for e in emails %}
+        <tr class="hover:bg-slate-50">
+          <td class="px-4 py-2 text-xs text-slate-500 whitespace-nowrap">{{ e.received_at[:19] }}</td>
+          <td class="px-4 py-2"><a href="/inbox/{{ e.id }}" class="underline">{{ e.from_name or e.from_email }}</a></td>
+          <td class="px-4 py-2 truncate max-w-md">{{ e.subject }}</td>
+          <td class="px-4 py-2 text-xs">
+            {% if e.category %}
+              <span class="px-2 py-0.5 rounded bg-slate-100">{{ e.category }}</span>
+              <span class="text-slate-500">{{ '%.2f' | format(e.confidence or 0) }}</span>
+            {% else %}
+              <span class="text-slate-400">–</span>
+            {% endif %}
+          </td>
+          <td class="px-4 py-2 text-xs">
+            {% if e.draft_id %}
+              <a href="/drafts/{{ e.draft_id }}" class="underline">{{ e.sent_status }}</a>
+            {% else %}
+              <span class="text-slate-400">–</span>
+            {% endif %}
+          </td>
+        </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endblock %}

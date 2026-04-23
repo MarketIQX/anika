@@ -1,0 +1,85 @@
+{% extends "base.html" %}
+{% block title %}Analytics · Anika{% endblock %}
+{% block content %}
+<h1 class="text-2xl font-semibold mb-4">Analytics — last 7 days</h1>
+
+<section class="grid md:grid-cols-4 gap-3 mb-6">
+  {% set kpis = [
+    ('Emails received', weekly.total_emails_7d),
+    ('Drafts generated', weekly.drafts_7d),
+    ('Approved', weekly.approved_7d),
+    ('Sent', weekly.sent_7d),
+    ('Edited', weekly.edited_7d),
+    ('Rejected', weekly.rejected_7d),
+  ] %}
+  {% for label, v in kpis %}
+    <div class="bg-white border border-slate-200 rounded-lg p-4">
+      <div class="text-xs text-slate-500 uppercase tracking-wide">{{ label }}</div>
+      <div class="text-2xl font-semibold mt-1">{{ v }}</div>
+    </div>
+  {% endfor %}
+</section>
+
+<section class="mb-6">
+  <h2 class="text-lg font-semibold mb-2">Classification breakdown</h2>
+  <div class="bg-white border border-slate-200 rounded-lg p-4">
+    {% if weekly.classified_breakdown %}
+      <div class="flex flex-wrap gap-3">
+        {% for c in weekly.classified_breakdown %}
+          <div class="px-3 py-2 bg-slate-100 rounded text-sm">
+            <span class="font-medium">{{ c.category }}</span>
+            <span class="ml-2 text-slate-700">{{ c.n }}</span>
+          </div>
+        {% endfor %}
+      </div>
+    {% else %}
+      <div class="text-sm text-slate-500">No classifications in the last 7 days.</div>
+    {% endif %}
+  </div>
+</section>
+
+<section class="mb-6">
+  <h2 class="text-lg font-semibold mb-2">Agent latency (7d)</h2>
+  <div class="bg-white border border-slate-200 rounded-lg overflow-hidden">
+    <table class="w-full text-sm">
+      <thead class="bg-slate-100 text-xs uppercase text-slate-600">
+        <tr>
+          <th class="text-left px-3 py-2">Agent</th>
+          <th class="text-left px-3 py-2">Calls</th>
+          <th class="text-left px-3 py-2">Avg ms</th>
+          <th class="text-left px-3 py-2">Max ms</th>
+        </tr>
+      </thead>
+      <tbody class="divide-y">
+        {% for l in latency %}
+          <tr>
+            <td class="px-3 py-2 font-medium">{{ l.agent_name }}</td>
+            <td class="px-3 py-2">{{ l.calls }}</td>
+            <td class="px-3 py-2">{{ '%.0f'|format(l.avg_ms or 0) }}</td>
+            <td class="px-3 py-2">{{ l.max_ms or '–' }}</td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<section>
+  <h2 class="text-lg font-semibold mb-2">Recent errors</h2>
+  {% if not recent_errors %}
+    <div class="text-sm text-slate-500">No errors — good.</div>
+  {% else %}
+    <div class="bg-white border border-slate-200 rounded-lg divide-y">
+      {% for e in recent_errors %}
+        <div class="px-4 py-3 text-sm">
+          <div class="flex justify-between text-xs text-slate-500">
+            <span>{{ e.agent_name }} · email #{{ e.email_id or '—' }}</span>
+            <span>{{ e.created_at[:19] }}</span>
+          </div>
+          <div class="text-rose-700 mt-1">{{ e.error_text }}</div>
+        </div>
+      {% endfor %}
+    </div>
+  {% endif %}
+</section>
+{% endblock %}

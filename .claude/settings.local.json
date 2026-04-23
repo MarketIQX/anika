@@ -1,0 +1,16 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(/c/Users/marke/anika-balakrishna/.venv/Scripts/python.exe --version)",
+      "Bash(/c/Users/marke/anika-balakrishna/.venv/Scripts/pip.exe list *)",
+      "Bash(/c/Users/marke/anika-balakrishna/.venv/Scripts/pip.exe install *)",
+      "Bash(/c/Users/marke/anika-balakrishna/.venv/Scripts/python.exe -m pip install --quiet --upgrade pip)",
+      "Bash(/c/Users/marke/anika-balakrishna/.venv/Scripts/python.exe -m pip install --quiet 'fastapi>=0.110' 'uvicorn[standard]>=0.29' 'jinja2>=3.1' 'python-multipart>=0.0.9' 'pydantic>=2.6' 'pydantic-settings>=2.2' 'httpx>=0.27' 'aiofiles>=23' 'openai>=1.55' 'openai-agents>=0.0.6' 'beautifulsoup4>=4.12' 'lxml>=5.1' 'pytest>=8.0' 'pytest-asyncio>=0.23' 'python-dateutil>=2.8')",
+      "Bash(/c/Users/marke/anika-balakrishna/.venv/Scripts/python.exe -m pip install --quiet sqlite-vss)",
+      "Bash(/c/Users/marke/anika-balakrishna/.venv/Scripts/python.exe -m pip install --quiet sqlite-vec)",
+      "Bash(/c/Users/marke/anika-balakrishna/.venv/Scripts/python.exe *)",
+      "Bash(.venv/Scripts/python.exe *)",
+      "Bash(powershell.exe -NoProfile -Command ' *)"
+    ]
+  }
+}

@@ -1,0 +1,51 @@
+[
+  {
+    "case": "nri_property_sale",
+    "from_email": "rajesh.kumar@example.com",
+    "from_name": "Rajesh Kumar",
+    "subject": "NRI — sold flat in Bangalore, need help with TDS and capital gains",
+    "body_plain": "Dear Sir,\n\nI am an NRI based in Dubai (OCI). I sold my flat in Bangalore last month for Rs 1.2 crores. The buyer deducted TDS at 20% but I believe it should be lower. I also need to file the ITR-2 for the capital gains.\n\nCould you please advise on the process and fees? I can share Form 26AS.\n\nBest regards,\nRajesh"
+  },
+  {
+    "case": "foreign_subsidiary",
+    "from_email": "sarah.chen@acmetech.com",
+    "from_name": "Sarah Chen",
+    "subject": "Setting up India subsidiary for US SaaS company",
+    "body_plain": "Hi,\n\nWe are Acme Tech, a Series B SaaS company in San Francisco. We want to set up a wholly-owned subsidiary in Bangalore to hire engineers. Do you help foreign companies with this kind of India entry? We'd also need ongoing payroll, tax, and HR compliance support.\n\nHow soon can we get on a call?\n\nSarah Chen\nCFO, Acme Tech"
+  },
+  {
+    "case": "transfer_pricing",
+    "from_email": "accounts@sundara-industries.in",
+    "from_name": "Sundara Industries Pvt Ltd",
+    "subject": "Transfer pricing study for FY25 — related party transactions",
+    "body_plain": "Dear Sir,\n\nWe are an Indian manufacturing company with significant related-party transactions with our UK parent. Our statutory auditor has flagged the need for a formal TP study and Form 3CEB report. Could you share your approach and typical timelines?\n\nRegards,\nAjay Venkatesh\nFinance Head, Sundara Industries"
+  },
+  {
+    "case": "virtual_cfo",
+    "from_email": "priya@blossomstartup.com",
+    "from_name": "Priya Menon",
+    "subject": "Virtual CFO for seed-stage startup",
+    "body_plain": "Hi,\n\nWe are a 14-person seed-stage startup in Bangalore, planning to raise our Series A in 4-5 months. We currently do our accounts on Zoho. We need a part-time CFO to help with investor readiness, MIS, and financial modeling.\n\nDo you offer this kind of engagement?\n\nThanks,\nPriya"
+  },
+  {
+    "case": "sensitive_legal_notice",
+    "from_email": "client_xyz@example.com",
+    "from_name": "Client XYZ",
+    "subject": "Legal notice from Income Tax — Section 148 scrutiny",
+    "body_plain": "Dear Sir, I received a legal notice from the Income Tax Department under Section 148 for reassessment of AY22. They are alleging unreported income of Rs 80 lakhs. I need urgent help.\n\nRegards"
+  },
+  {
+    "case": "automated_delivery_bounce",
+    "from_email": "mailer-daemon@googlemail.com",
+    "from_name": "Mail Delivery Subsystem",
+    "subject": "Delivery Status Notification (Failure)",
+    "body_plain": "Your message to foo@bar.com was rejected."
+  },
+  {
+    "case": "spam_promo",
+    "from_email": "offers@generic-marketing.biz",
+    "from_name": "Marketing Promos",
+    "subject": "UNLOCK 50% OFF on cloud accounting software!",
+    "body_plain": "Click here to upgrade your plan now! Limited time offer ends today!!!"
+  }
+]

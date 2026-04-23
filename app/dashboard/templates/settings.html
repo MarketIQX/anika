@@ -1,0 +1,187 @@
+{% extends "base.html" %}
+{% block title %}Settings · Anika{% endblock %}
+{% block content %}
+<h1 class="text-2xl font-semibold mb-4">Settings</h1>
+
+<section class="grid md:grid-cols-2 gap-4 mb-6">
+  <div class="bg-white border border-slate-200 rounded-lg p-4">
+    <div class="text-xs text-slate-500 uppercase tracking-wide mb-2">Kill switch</div>
+    <div class="text-sm mb-3">
+      {% if kill_switch_on %}
+        <span class="px-2 py-0.5 rounded bg-red-100 text-red-800">ON</span>
+        Anika is halted — no drafting or sending.
+      {% else %}
+        <span class="px-2 py-0.5 rounded bg-emerald-100 text-emerald-800">OFF</span>
+        Anika is running normally.
+      {% endif %}
+    </div>
+    <form method="post" action="/settings/kill_switch" class="flex gap-2">
+      {% if kill_switch_on %}
+        <input type="hidden" name="turn" value="off" />
+        <button class="px-3 py-1.5 bg-emerald-600 text-white rounded text-sm" type="submit">Resume</button>
+      {% else %}
+        <input type="hidden" name="turn" value="on" />
+        <button class="px-3 py-1.5 bg-red-600 text-white rounded text-sm" type="submit">Halt</button>
+      {% endif %}
+    </form>
+  </div>
+
+  <div class="bg-white border border-slate-200 rounded-lg p-4">
+    <div class="text-xs text-slate-500 uppercase tracking-wide mb-2">Gmail connection</div>
+    <div class="text-sm mb-3">
+      {% if gmail_connected %}
+        <span class="px-2 py-0.5 rounded bg-emerald-100 text-emerald-800">Connected</span>
+      {% else %}
+        <span class="px-2 py-0.5 rounded bg-amber-100 text-amber-800">Not connected</span>
+      {% endif %}
+    </div>
+    {% if current_user.is_admin %}
+      <div class="flex flex-wrap gap-2">
+        <a href="/settings/gmail/connect" class="px-3 py-1.5 bg-slate-900 text-white rounded text-sm">Run OAuth flow</a>
+        <form method="post" action="/settings/poll_now">
+          <button class="px-3 py-1.5 bg-slate-200 text-slate-800 rounded text-sm" type="submit">Poll now</button>
+        </form>
+        <form method="post" action="/settings/backfill_memory">
+          <button class="px-3 py-1.5 bg-slate-200 text-slate-800 rounded text-sm" type="submit"
+                  title="Embed firm snippets + seed exemplar replies into memory">
+            Seed memory vectors
+          </button>
+        </form>
+      </div>
+    {% else %}
+      <div class="text-xs text-slate-500">Contact AK for Gmail OAuth changes.</div>
+    {% endif %}
+  </div>
+
+  <div class="bg-white border border-slate-200 rounded-lg p-4 md:col-span-2">
+    <div class="text-xs text-slate-500 uppercase tracking-wide mb-2">Approval notifications</div>
+    <div class="text-sm">
+      Prakash sir receives a 1-line email whenever a draft is ready for approval.
+    </div>
+    <ul class="mt-2 text-xs text-slate-600 space-y-1">
+      <li>Notify email: <code>{{ notify_email }}</code></li>
+      <li>Dashboard URL in notifications: <code>{{ public_base_url }}</code></li>
+      <li>To change either, edit the <code>.env</code> file and restart.</li>
+    </ul>
+  </div>
+
+  {% if current_user.is_admin %}
+    <div class="bg-white border border-slate-200 rounded-lg p-4 md:col-span-2">
+      <div class="text-xs text-slate-500 uppercase tracking-wide mb-2">Audit log</div>
+      <div class="text-sm mb-2">Every login, approval, kill-switch toggle, and settings write.</div>
+      <a href="/settings/audit" class="px-3 py-1.5 bg-slate-900 text-white rounded text-sm">Open audit log</a>
+    </div>
+  {% endif %}
+</section>
+
+{% if current_user.is_admin %}
+<section class="mb-6">
+  <h2 class="text-lg font-semibold mb-2">VIP clients (no auto-draft)</h2>
+  <div class="bg-white border border-slate-200 rounded-lg p-4">
+    <form method="post" action="/settings/clients/add" class="grid md:grid-cols-5 gap-2 text-sm">
+      <input name="email" required placeholder="email" class="border border-slate-300 rounded p-2" />
+      <input name="name" placeholder="name" class="border border-slate-300 rounded p-2" />
+      <input name="organisation" placeholder="organisation" class="border border-slate-300 rounded p-2" />
+      <label class="flex items-center gap-2 text-xs">
+        <input type="checkbox" name="is_vip_flag" /> VIP
+      </label>
+      <button class="px-3 py-2 bg-slate-900 text-white rounded text-sm" type="submit">Add</button>
+    </form>
+  </div>
+  <div class="bg-white border border-slate-200 rounded-lg overflow-hidden mt-3">
+    <table class="w-full text-sm">
+      <thead class="bg-slate-100 text-xs uppercase text-slate-600">
+        <tr>
+          <th class="text-left px-3 py-2">Email</th>
+          <th class="text-left px-3 py-2">Name</th>
+          <th class="text-left px-3 py-2">Org</th>
+          <th class="text-left px-3 py-2">VIP</th>
+          <th class="text-left px-3 py-2"></th>
+        </tr>
+      </thead>
+      <tbody class="divide-y">
+        {% for c in clients %}
+          <tr>
+            <td class="px-3 py-2">{{ c.email }}</td>
+            <td class="px-3 py-2">{{ c.name or '' }}</td>
+            <td class="px-3 py-2">{{ c.organisation or '' }}</td>
+            <td class="px-3 py-2">
+              <form method="post" action="/settings/clients/{{ c.id }}/vip">
+                <input type="hidden" name="vip" value="{% if c.is_vip %}off{% else %}on{% endif %}" />
+                <button class="px-2 py-0.5 text-xs rounded
+                  {% if c.is_vip %}bg-rose-100 text-rose-800{% else %}bg-slate-100 text-slate-700{% endif %}"
+                  type="submit">{% if c.is_vip %}VIP · click to unflag{% else %}not VIP · click to flag{% endif %}</button>
+              </form>
+            </td>
+            <td class="px-3 py-2">
+              <form method="post" action="/settings/clients/{{ c.id }}/delete">
+                <button class="text-xs text-rose-700 underline" type="submit">delete</button>
+              </form>
+            </td>
+          </tr>
+        {% endfor %}
+        {% if not clients %}
+          <tr><td class="px-3 py-3 text-slate-500" colspan="5">No clients on file yet.</td></tr>
+        {% endif %}
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<section class="mb-6">
+  <h2 class="text-lg font-semibold mb-2">Rules</h2>
+  <div class="bg-white border border-slate-200 rounded-lg overflow-hidden">
+    <table class="w-full text-sm">
+      <thead class="bg-slate-100 text-xs uppercase text-slate-600">
+        <tr>
+          <th class="text-left px-3 py-2">Type</th>
+          <th class="text-left px-3 py-2">Pattern / value</th>
+          <th class="text-left px-3 py-2">Active</th>
+        </tr>
+      </thead>
+      <tbody class="divide-y">
+        {% for r in rules %}
+          <tr>
+            <td class="px-3 py-2 font-mono text-xs">{{ r.rule_type }}</td>
+            <td class="px-3 py-2 text-xs">
+              {% if r.pattern %}<div class="font-mono">{{ r.pattern }}</div>{% endif %}
+              {% if r.threshold_value %}<div>{{ r.threshold_value }}</div>{% endif %}
+              {% if r.text_value %}<div>{{ r.text_value }}</div>{% endif %}
+            </td>
+            <td class="px-3 py-2 text-xs">{{ 'yes' if r.is_active else 'no' }}</td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<section class="mb-6">
+  <h2 class="text-lg font-semibold mb-2">Firm knowledge</h2>
+  <div class="bg-white border border-slate-200 rounded-lg overflow-hidden">
+    <table class="w-full text-sm">
+      <thead class="bg-slate-100 text-xs uppercase text-slate-600">
+        <tr>
+          <th class="text-left px-3 py-2">Key</th>
+          <th class="text-left px-3 py-2">Category</th>
+          <th class="text-left px-3 py-2">Value</th>
+        </tr>
+      </thead>
+      <tbody class="divide-y">
+        {% for f in firm_facts %}
+          <tr>
+            <td class="px-3 py-2 font-mono text-xs">{{ f.key }}</td>
+            <td class="px-3 py-2 text-xs">{{ f.category }}</td>
+            <td class="px-3 py-2 text-xs whitespace-pre-line">{{ f.value }}</td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>
+{% else %}
+  <div class="bg-white border border-slate-200 rounded-lg p-4 text-sm text-slate-600">
+    VIP clients, rules, and firm-knowledge management are admin-only. Contact AK if you need changes.
+  </div>
+{% endif %}
+{% endblock %}

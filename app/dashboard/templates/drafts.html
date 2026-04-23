@@ -1,0 +1,59 @@
+{% extends "base.html" %}
+{% block title %}Drafts · Anika{% endblock %}
+{% block content %}
+<h1 class="text-2xl font-semibold mb-4">Pending approval ({{ pending|length }})</h1>
+
+{% if pending|length == 0 %}
+  <div class="bg-white border border-slate-200 rounded-lg p-8 text-center text-slate-500">
+    No drafts awaiting approval. Anika will notify you by email when one is ready.
+  </div>
+{% else %}
+  <div class="space-y-3">
+    {% for d in pending %}
+      <a href="/drafts/{{ d.id }}" class="block bg-white border border-slate-200 rounded-lg p-4 hover:border-slate-400">
+        <div class="flex items-center justify-between gap-4">
+          <div>
+            <div class="font-medium text-slate-900">{{ d.from_name or d.from_email }}</div>
+            <div class="text-sm text-slate-500">{{ d.from_email }}</div>
+          </div>
+          <div class="flex flex-wrap gap-2 text-xs">
+            {% if d.urgency %}
+              <span class="px-2 py-0.5 rounded
+                {% if d.urgency == 'hot' %}bg-red-100 text-red-800
+                {% elif d.urgency == 'warm' %}bg-amber-100 text-amber-800
+                {% else %}bg-slate-100 text-slate-700{% endif %}">
+                {{ d.urgency|upper }}
+              </span>
+            {% endif %}
+            {% if d.likely_service_line %}
+              <span class="px-2 py-0.5 rounded bg-sky-100 text-sky-800">{{ d.likely_service_line }}</span>
+            {% endif %}
+          </div>
+        </div>
+        <div class="mt-2 text-sm font-medium">{{ d.subject }}</div>
+        <div class="mt-1 text-sm text-slate-600 whitespace-pre-line">{{ d.summary or '' }}</div>
+      </a>
+    {% endfor %}
+  </div>
+{% endif %}
+
+{% if recent %}
+  <h2 class="text-lg font-semibold mt-10 mb-3">Recently handled</h2>
+  <div class="bg-white border border-slate-200 rounded-lg divide-y">
+    {% for d in recent %}
+      <a href="/drafts/{{ d.id }}" class="flex items-center justify-between px-4 py-3 hover:bg-slate-50">
+        <div>
+          <div class="text-sm font-medium">{{ d.from_name or d.from_email }}</div>
+          <div class="text-xs text-slate-500">{{ d.subject }}</div>
+        </div>
+        <span class="text-xs px-2 py-0.5 rounded
+          {% if d.sent_status == 'sent' %}bg-emerald-100 text-emerald-800
+          {% elif d.sent_status == 'rejected' %}bg-rose-100 text-rose-800
+          {% else %}bg-slate-100 text-slate-700{% endif %}">
+          {{ d.sent_status }}
+        </span>
+      </a>
+    {% endfor %}
+  </div>
+{% endif %}
+{% endblock %}

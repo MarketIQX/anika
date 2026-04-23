@@ -1,0 +1,74 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}Anika{% endblock %}</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <style>
+    .prose pre { white-space: pre-wrap; word-break: break-word; }
+  </style>
+</head>
+<body class="bg-slate-50 text-slate-900 min-h-screen">
+  <header class="bg-white border-b border-slate-200">
+    <div class="max-w-6xl mx-auto px-6 py-3 flex items-center justify-between">
+      <div class="flex items-center gap-3">
+        <a href="/" class="text-xl font-semibold text-slate-800">Anika</a>
+        <span class="text-xs text-slate-500 tracking-wide uppercase">for CA S V Prakasha</span>
+      </div>
+      <nav class="flex items-center gap-1 text-sm">
+        {# Tabs are role-gated: user sees Drafts/Inbox/Settings only. #}
+        {% set all_tabs = [
+            ('drafts','Drafts','user'),
+            ('inbox','Inbox','user'),
+            ('train','Train','admin'),
+            ('analytics','Analytics','admin'),
+            ('settings','Settings','user'),
+        ] %}
+        {% for key, label, min_role in all_tabs %}
+          {% if min_role == 'user' or (current_user and current_user.is_admin) %}
+            <a href="/{{ key }}"
+               class="px-3 py-1.5 rounded-md {% if active_tab == key %}bg-slate-900 text-white{% else %}text-slate-600 hover:bg-slate-100{% endif %}">
+              {{ label }}
+            </a>
+          {% endif %}
+        {% endfor %}
+
+        {% if current_user %}
+          <div class="ml-3 pl-3 border-l border-slate-200 flex items-center gap-2">
+            <span class="text-xs text-slate-600">{{ current_user.email }}</span>
+            <span class="text-[10px] px-1.5 py-0.5 rounded uppercase tracking-wide
+              {% if current_user.is_admin %}bg-indigo-100 text-indigo-800{% else %}bg-slate-200 text-slate-700{% endif %}">
+              {{ current_user.role }}
+            </span>
+            <a href="/account" class="text-xs text-slate-500 hover:text-slate-900 underline">Change password</a>
+            <form method="post" action="/logout" class="inline">
+              <button class="text-xs text-slate-500 hover:text-slate-900 underline" type="submit">Logout</button>
+            </form>
+          </div>
+        {% endif %}
+      </nav>
+    </div>
+    <div class="max-w-6xl mx-auto px-6 pb-2 flex flex-wrap gap-2 text-xs">
+      {% if not gmail_connected %}
+        <span class="px-2 py-1 bg-amber-100 text-amber-800 rounded">Gmail not connected — <a class="underline" href="/settings">connect in Settings</a></span>
+      {% else %}
+        <span class="px-2 py-1 bg-emerald-100 text-emerald-800 rounded">Gmail connected</span>
+      {% endif %}
+      {% if kill_switch_on %}
+        <span class="px-2 py-1 bg-red-100 text-red-800 rounded font-semibold">Kill switch: ON (no drafting or sending)</span>
+      {% endif %}
+      {% if test_mode %}
+        <span class="px-2 py-1 bg-purple-100 text-purple-800 rounded">TEST MODE — no real sends</span>
+      {% endif %}
+      <span class="px-2 py-1 bg-slate-200 text-slate-700 rounded">Today: {{ cap_status.sent_today }}/{{ cap_status.cap }} sent</span>
+    </div>
+  </header>
+  <main class="max-w-6xl mx-auto px-6 py-6">
+    {% block content %}{% endblock %}
+  </main>
+  <footer class="max-w-6xl mx-auto px-6 py-6 text-xs text-slate-500">
+    Anika v1.0 · MarketIQX · Balakrishna &amp; Co
+  </footer>
+</body>
+</html>

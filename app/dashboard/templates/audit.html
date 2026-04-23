@@ -1,0 +1,52 @@
+{% extends "base.html" %}
+{% block title %}Audit log · Anika{% endblock %}
+{% block content %}
+<div class="mb-2 text-sm"><a class="underline text-slate-600" href="/settings">← Back to settings</a></div>
+<h1 class="text-2xl font-semibold mb-4">Audit log</h1>
+<p class="text-sm text-slate-600 mb-4">
+  Append-only record of logins, approvals, kill-switch toggles, and settings writes.
+  Showing the most recent 300 events.
+</p>
+
+<div class="bg-white border border-slate-200 rounded-lg overflow-hidden">
+  <table class="w-full text-sm">
+    <thead class="bg-slate-100 text-xs uppercase text-slate-600">
+      <tr>
+        <th class="text-left px-3 py-2">When (UTC)</th>
+        <th class="text-left px-3 py-2">Actor</th>
+        <th class="text-left px-3 py-2">Action</th>
+        <th class="text-left px-3 py-2">Target</th>
+        <th class="text-left px-3 py-2">IP</th>
+        <th class="text-left px-3 py-2">User agent</th>
+      </tr>
+    </thead>
+    <tbody class="divide-y">
+      {% for r in rows %}
+        <tr>
+          <td class="px-3 py-2 text-xs text-slate-500 whitespace-nowrap">{{ r.created_at[:19] }}</td>
+          <td class="px-3 py-2 text-xs">{{ r.user_email or '—' }}</td>
+          <td class="px-3 py-2 text-xs">
+            <span class="px-2 py-0.5 rounded
+              {% if r.action == 'login_success' %}bg-emerald-100 text-emerald-800
+              {% elif r.action == 'login_failure' %}bg-rose-100 text-rose-800
+              {% elif r.action == 'logout' %}bg-slate-100 text-slate-700
+              {% elif r.action == 'draft_approve' %}bg-emerald-100 text-emerald-800
+              {% elif r.action == 'draft_reject' %}bg-rose-100 text-rose-800
+              {% elif r.action == 'draft_edit' %}bg-amber-100 text-amber-800
+              {% elif r.action.startswith('kill_switch') %}bg-red-100 text-red-800
+              {% else %}bg-sky-100 text-sky-800{% endif %}">
+              {{ r.action }}
+            </span>
+          </td>
+          <td class="px-3 py-2 text-xs">{{ r.target or '' }}</td>
+          <td class="px-3 py-2 text-xs text-slate-500">{{ r.ip_address or '' }}</td>
+          <td class="px-3 py-2 text-xs text-slate-500 truncate max-w-xs">{{ r.user_agent or '' }}</td>
+        </tr>
+      {% endfor %}
+      {% if not rows %}
+        <tr><td colspan="6" class="px-3 py-4 text-slate-500">No events yet.</td></tr>
+      {% endif %}
+    </tbody>
+  </table>
+</div>
+{% endblock %}

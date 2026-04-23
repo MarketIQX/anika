@@ -1,0 +1,63 @@
+{% extends "base.html" %}
+{% block title %}Change password · Anika{% endblock %}
+{% block content %}
+
+<div class="max-w-md mx-auto">
+  <div class="mb-4 text-sm"><a class="underline text-slate-600" href="/">← Back to dashboard</a></div>
+  <h1 class="text-2xl font-semibold mb-1">Change password</h1>
+  <p class="text-sm text-slate-600 mb-4">Signed in as <code>{{ current_user.email }}</code></p>
+
+  {% if success %}
+    <div class="mb-4 p-3 bg-emerald-100 text-emerald-900 rounded text-sm">
+      Password updated. Your session is still active — you won't be signed out.
+    </div>
+  {% endif %}
+
+  {% if errors %}
+    <div class="mb-4 p-3 bg-rose-100 text-rose-900 rounded text-sm">
+      <ul class="list-disc list-inside space-y-1">
+        {% for e in errors %}
+          <li>{{ e }}</li>
+        {% endfor %}
+      </ul>
+    </div>
+  {% endif %}
+
+  <form method="post" action="/account/change-password"
+        class="bg-white border border-slate-200 rounded-lg p-6 space-y-4">
+    <div>
+      <label class="block text-sm text-slate-600 mb-1">Current password</label>
+      <input type="password" name="current_password" required autocomplete="current-password" autofocus
+             class="w-full border border-slate-300 rounded p-2 text-sm focus:outline-none focus:border-slate-900" />
+    </div>
+
+    <div>
+      <label class="block text-sm text-slate-600 mb-1">New password</label>
+      <input type="password" name="new_password" required autocomplete="new-password"
+             minlength="10"
+             class="w-full border border-slate-300 rounded p-2 text-sm focus:outline-none focus:border-slate-900" />
+      <p class="mt-1 text-xs text-slate-500">
+        Minimum 10 characters. Must contain at least one letter and one digit.
+        Cannot be the same as your current password.
+      </p>
+    </div>
+
+    <div>
+      <label class="block text-sm text-slate-600 mb-1">Confirm new password</label>
+      <input type="password" name="confirm_password" required autocomplete="new-password"
+             minlength="10"
+             class="w-full border border-slate-300 rounded p-2 text-sm focus:outline-none focus:border-slate-900" />
+    </div>
+
+    <button type="submit"
+            class="w-full py-2 bg-slate-900 hover:bg-slate-800 text-white font-medium rounded-md">
+      Update password
+    </button>
+  </form>
+
+  <p class="mt-4 text-xs text-slate-500 text-center">
+    Forgot your password? Ask AK to reset it via
+    <code class="text-slate-700">scripts\set_password.ps1</code>.
+  </p>
+</div>
+{% endblock %}

@@ -15,19 +15,21 @@ import logging
 from pathlib import Path
 from typing import Any
 
-from fastapi import APIRouter, Depends, Form, HTTPException, Request
-from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 
 from app.agents import approver
 from app.auth import access_log
 from app.auth.deps import client_ip, client_ua, current_user, require_admin, require_user
 from app.auth.users import User
+from app.cognitive import library as kb_library
+from app.cognitive import teaching
 from app.config import get_settings
 from app.db import execute, fetch_all, fetch_one
-from app.guardrails import daily_cap, kill_switch
+from app.guardrails import daily_cap, drafting_paused, kill_switch
 from app.jobs import backfill_memory, poll_gmail, weekly_review
-from app.tools import client_tool, gmail_tool
+from app.tools import client_tool, file_extractors, gmail_tool
 
 logger = logging.getLogger(__name__)
 
@@ -310,38 +312,341 @@ async def inbox_detail(request: Request, email_id: int, user: User = Depends(req
 
 
 @router.get("/train", response_class=HTMLResponse)
-async def train_index(request: Request, user: User = Depends(require_admin)):
-    prompts = fetch_all(
-        """
-        SELECT agent_name, version, change_note, is_active, created_at,
-               substr(prompt_text, 1, 200) AS preview
-          FROM agent_prompts
-         ORDER BY agent_name, version DESC
-        """
-    )
-    learner_events = fetch_all(
-        """
-        SELECT rl.created_at, rl.draft_id, rl.output_json, rl.reasoning_text
-          FROM reasoning_log rl
-         WHERE rl.agent_name = 'learner'
-         ORDER BY rl.created_at DESC
-         LIMIT 30
-        """
-    )
-    approvals_stats = fetch_all(
-        """
-        SELECT decision, COUNT(*) n FROM approvals
-         GROUP BY decision ORDER BY decision
-        """
-    )
+async def train_index(request: Request, user: User = Depends(require_user)):
+    """Teaching dashboard — both roles can access.
+
+    Sections:
+      A. Pending clarifications (if any)
+      B. Teach Anika (textarea + file drop)
+      C. Knowledge library (rules / examples / facts / policies, filterable)
+      D. Library export (admin + user)
+      E. Admin prompt preview (admin only)
+      +  Legacy agent_prompts table (admin only — kept for history/audit)
+    """
+    clarifications = teaching.pending_clarifications()
+    queue_recent = teaching.recent_queue(limit=10)
+
+    # Library filter: ?kind=rule/example/fact/policy and ?service_line=...
+    kind_filter = request.query_params.get("kind") or None
+    sl_filter = request.query_params.get("service_line") or None
+    entries = kb_library.list_entries(kind=kind_filter, service_line=sl_filter)
+
+    # Counts per kind for the tab chips.
+    kind_counts = {
+        r["kind"]: int(r["n"])
+        for r in fetch_all(
+            "SELECT kind, COUNT(*) n FROM knowledge_library WHERE is_active=1 GROUP BY kind"
+        )
+    }
+
+    prompts = []
+    learner_events = []
+    approvals_stats = []
+    if user.is_admin:
+        prompts = fetch_all(
+            """
+            SELECT agent_name, version, change_note, is_active, created_at,
+                   substr(prompt_text, 1, 200) AS preview
+              FROM agent_prompts
+             ORDER BY agent_name, version DESC
+            """
+        )
+        learner_events = fetch_all(
+            """
+            SELECT rl.created_at, rl.draft_id, rl.output_json, rl.reasoning_text
+              FROM reasoning_log rl
+             WHERE rl.agent_name = 'learner'
+             ORDER BY rl.created_at DESC
+             LIMIT 30
+            """
+        )
+        approvals_stats = fetch_all(
+            """
+            SELECT decision, COUNT(*) n FROM approvals
+             GROUP BY decision ORDER BY decision
+            """
+        )
+
+    # Admin prompt preview — most recent drafter reasoning_log entry.
+    prompt_preview = None
+    if user.is_admin:
+        row = fetch_one(
+            """
+            SELECT created_at, email_id, draft_id, input_json, reasoning_text
+              FROM reasoning_log
+             WHERE agent_name = 'drafter'
+             ORDER BY id DESC LIMIT 1
+            """
+        )
+        if row:
+            try:
+                import json as _json
+                data = _json.loads(row["input_json"] or "{}")
+                prompt_preview = {
+                    "created_at": row["created_at"],
+                    "draft_id": row["draft_id"],
+                    "prompt_text": data.get("assembled_prompt") or "(legacy draft — runtime assembly not used)",
+                    "used_library_ids": data.get("used_library_ids") or [],
+                }
+            except Exception:  # noqa: BLE001
+                pass
+
     ctx = _common_context(request, user)
     ctx.update({
+        "clarifications": clarifications,
+        "queue_recent": queue_recent,
+        "entries": entries,
+        "kind_filter": kind_filter,
+        "sl_filter": sl_filter,
+        "kind_counts": kind_counts,
         "prompts": prompts,
         "learner_events": learner_events,
         "approvals_stats": approvals_stats,
+        "prompt_preview": prompt_preview,
+        "drafting_paused": drafting_paused.is_on(),
         "active_tab": "train",
     })
     return templates.TemplateResponse(request, "train.html", ctx)
+
+
+# --- Teach (text + files) --------------------------------------------------
+
+
+@router.post("/train/teach")
+async def train_teach(
+    request: Request,
+    content: str = Form(""),
+    files: list[UploadFile] = File(default_factory=list),
+    user: User = Depends(require_user),
+):
+    """Accept a text paste and/or one-or-more files. One queue row per input."""
+    import time
+
+    uploads_dir = teaching._ensure_uploads_dir()
+    created_ids: list[int] = []
+    errors: list[str] = []
+
+    content = (content or "").strip()
+    if content:
+        qid = teaching.enqueue_text(raw_content=content, created_by=user.email)
+        try:
+            await teaching.finalize_queue(qid)
+        except Exception as e:  # noqa: BLE001
+            errors.append(f"text: {e}")
+        created_ids.append(qid)
+
+    for uf in files:
+        if not uf.filename:
+            continue
+        body = await uf.read()
+        if len(body) > file_extractors.MAX_UPLOAD_BYTES:
+            errors.append(f"{uf.filename}: exceeds 50 MB limit")
+            continue
+        # Unique-stamped filename, keep original extension.
+        stem = Path(uf.filename).stem
+        suffix = Path(uf.filename).suffix.lower()
+        stamp = int(time.time() * 1000)
+        safe_name = f"{stamp}__{stem}{suffix}"
+        target = uploads_dir / safe_name
+        target.write_bytes(body)
+        # Extract.
+        try:
+            extracted = file_extractors.extract(target)
+        except file_extractors.FileTooLargeError as e:
+            errors.append(f"{uf.filename}: {e}")
+            continue
+        except file_extractors.ExtractionError as e:
+            errors.append(f"{uf.filename}: {e}")
+            continue
+        qid = teaching.enqueue_file(
+            raw_content=extracted.text,
+            file_mime=uf.content_type,
+            original_filename=uf.filename,
+            stored_path=str(target.relative_to(uploads_dir.parent.parent)),
+            created_by=user.email,
+        )
+        try:
+            await teaching.finalize_queue(qid)
+        except Exception as e:  # noqa: BLE001
+            errors.append(f"{uf.filename}: {e}")
+        created_ids.append(qid)
+
+    access_log.log(
+        action="teach_submit",
+        user_email=user.email,
+        target=",".join(str(i) for i in created_ids),
+        ip_address=client_ip(request), user_agent=client_ua(request),
+    )
+    # Bounce back to /train. If there were errors, pass them via a flash.
+    flash = "; ".join(errors)[:300] if errors else ""
+    qs = f"?flash={flash}" if flash else ""
+    return RedirectResponse(f"/train{qs}", status_code=303)
+
+
+# --- Clarifications --------------------------------------------------------
+
+
+@router.post("/train/clarify/{clar_id}")
+async def train_clarify(
+    request: Request,
+    clar_id: int,
+    answer: str = Form(...),
+    user: User = Depends(require_user),
+):
+    try:
+        await teaching.answer_clarification(
+            clar_id, answer=answer, answered_by=user.email,
+        )
+    except ValueError as e:
+        return JSONResponse({"ok": False, "error": str(e)}, status_code=404)
+    access_log.log(
+        action="teach_clarify",
+        user_email=user.email, target=str(clar_id),
+        ip_address=client_ip(request), user_agent=client_ua(request),
+    )
+    return RedirectResponse("/train", status_code=303)
+
+
+# --- Library edit / delete -------------------------------------------------
+
+
+@router.post("/train/library/{entry_id}/edit")
+async def train_library_edit(
+    request: Request,
+    entry_id: int,
+    content: str = Form(...),
+    kind: str = Form(...),
+    scope: str = Form("universal"),
+    service_line: str = Form(""),
+    user: User = Depends(require_user),
+):
+    if kind not in ("rule", "example", "fact", "policy"):
+        return JSONResponse({"ok": False, "error": "invalid kind"}, status_code=400)
+    if scope not in ("universal", "service_line"):
+        return JSONResponse({"ok": False, "error": "invalid scope"}, status_code=400)
+    kb_library.update_entry(
+        entry_id,
+        content=content,
+        kind=kind,
+        scope=scope,
+        service_line=service_line.strip() or None,
+    )
+    access_log.log(
+        action="library_edit",
+        user_email=user.email, target=str(entry_id),
+        ip_address=client_ip(request), user_agent=client_ua(request),
+    )
+    return RedirectResponse("/train", status_code=303)
+
+
+@router.post("/train/library/{entry_id}/delete")
+async def train_library_delete(
+    request: Request,
+    entry_id: int,
+    user: User = Depends(require_user),
+):
+    """Soft delete — both roles can do it (consistent with the brief)."""
+    ok = kb_library.soft_delete_entry(entry_id, deleted_by=user.email)
+    if not ok:
+        return JSONResponse({"ok": False, "error": "entry not found"}, status_code=404)
+    access_log.log(
+        action="library_delete",
+        user_email=user.email, target=str(entry_id),
+        ip_address=client_ip(request), user_agent=client_ua(request),
+    )
+    return RedirectResponse("/train", status_code=303)
+
+
+# --- Library export --------------------------------------------------------
+
+
+@router.get("/train/library/export")
+async def train_library_export(
+    request: Request,
+    fmt: str = "xlsx",
+    user: User = Depends(require_user),
+):
+    """Export the active library as xlsx (default) or json.
+
+    Both roles can export — it's Prakasha sir's knowledge, he owns the
+    ability to walk away with it.
+    """
+    import io
+    import json as _json
+    from datetime import datetime, timezone
+
+    rows = kb_library.list_entries(include_inactive=False, limit=10_000)
+    stamp = datetime.now(tz=timezone.utc).strftime("%Y%m%d-%H%M")
+
+    access_log.log(
+        action="library_export",
+        user_email=user.email, target=fmt,
+        ip_address=client_ip(request), user_agent=client_ua(request),
+    )
+
+    if fmt == "json":
+        data = _json.dumps(rows, indent=2, ensure_ascii=False, default=str)
+        return HTMLResponse(
+            content=data,
+            media_type="application/json",
+            headers={"Content-Disposition": f'attachment; filename="anika-library-{stamp}.json"'},
+        )
+
+    # xlsx (default)
+    import openpyxl
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "knowledge_library"
+    headers_row = ["id", "kind", "scope", "service_line", "content",
+                   "confidence", "applied_count", "last_used_at", "created_by",
+                   "created_at", "updated_at"]
+    ws.append(headers_row)
+    for r in rows:
+        ws.append([r.get(h) for h in headers_row])
+    buf = io.BytesIO()
+    wb.save(buf)
+    buf.seek(0)
+    return HTMLResponse(
+        content=buf.getvalue(),
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f'attachment; filename="anika-library-{stamp}.xlsx"'},
+    )
+
+
+# --- Drafting pause toggle (admin only) -----------------------------------
+
+
+@router.post("/settings/drafting_paused")
+async def toggle_drafting_paused(
+    request: Request,
+    turn: str = Form(...),
+    user: User = Depends(require_admin),
+):
+    if turn == "on":
+        drafting_paused.set_on()
+        access_log.log(action="drafting_paused_on", user_email=user.email,
+                       ip_address=client_ip(request), user_agent=client_ua(request))
+    else:
+        drafting_paused.set_off()
+        access_log.log(action="drafting_paused_off", user_email=user.email,
+                       ip_address=client_ip(request), user_agent=client_ua(request))
+    return RedirectResponse("/settings", status_code=303)
+
+
+# --- Signature-block hard lock --------------------------------------------
+# No route mutates SIGNATURE_BLOCK. Any attempt to set a firm_knowledge
+# row with key='signature_block' via a hypothetical write path returns 403.
+
+
+@router.post("/settings/signature")
+@router.put("/settings/signature")
+@router.delete("/settings/signature")
+async def signature_is_locked(request: Request, user: User = Depends(require_user)):
+    """The signature block is constants-only. See app/config/firm_identity.py."""
+    raise HTTPException(
+        status_code=403,
+        detail="signature block is locked; edit app/config/firm_identity.py and redeploy",
+    )
 
 
 # ---------------------------------------------------------------------------

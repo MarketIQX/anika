@@ -288,6 +288,84 @@ CREATE TABLE IF NOT EXISTS system_state (
 );
 
 -- ---------------------------------------------------------------------------
+-- TEACHING SYSTEM (v2) — Prakasha sir teaches Anika like onboarding a junior.
+--
+-- Flow:
+--   1. User pastes text or uploads files  -> teaching_queue row (status=pending)
+--   2. Learner extracts units + clarifications -> units saved as knowledge_library
+--      rows (status=approved) OR queued as clarifications rows (status=pending)
+--   3. User answers clarifications -> knowledge_library rows promoted to active
+--   4. Drafter retrieves from knowledge_library at draft time via embeddings
+-- ---------------------------------------------------------------------------
+
+CREATE TABLE IF NOT EXISTS teaching_queue (
+    id               INTEGER PRIMARY KEY AUTOINCREMENT,
+    raw_content      TEXT NOT NULL,       -- plain-text extract of text+files
+    source_type      TEXT NOT NULL CHECK (source_type IN ('text','file')),
+    file_mime        TEXT,                -- for file uploads
+    original_filename TEXT,               -- original upload filename (safe-echo back)
+    stored_path      TEXT,                -- relative path under data/uploads/
+    status           TEXT NOT NULL CHECK (status IN (
+        'pending','processing','needs_clarification','approved','rejected','failed'
+    )) DEFAULT 'pending',
+    error_text       TEXT,                -- populated on 'failed'
+    created_by_user  TEXT NOT NULL,
+    created_at       TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+    processed_at     TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_tq_status ON teaching_queue(status);
+CREATE INDEX IF NOT EXISTS idx_tq_created ON teaching_queue(created_at);
+
+CREATE TABLE IF NOT EXISTS knowledge_library (
+    id               INTEGER PRIMARY KEY AUTOINCREMENT,
+    kind             TEXT NOT NULL CHECK (kind IN ('rule','example','fact','policy')),
+    content          TEXT NOT NULL,
+    service_line     TEXT,                -- freetext, e.g. 'nri_tax','foreign_subsidiary'
+    scope            TEXT NOT NULL CHECK (scope IN ('universal','service_line'))
+                                            DEFAULT 'universal',
+    source_queue_id  INTEGER REFERENCES teaching_queue(id),
+    confidence       REAL NOT NULL DEFAULT 1.0 CHECK (confidence BETWEEN 0.0 AND 1.0),
+    applied_count    INTEGER NOT NULL DEFAULT 0,
+    last_used_at     TEXT,
+    is_active        INTEGER NOT NULL DEFAULT 1,   -- 0 = soft-deleted
+    created_by       TEXT,                         -- user email that created the entry
+    deleted_by       TEXT,                         -- user email that soft-deleted
+    deleted_at       TEXT,
+    created_at       TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+    updated_at       TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+);
+CREATE INDEX IF NOT EXISTS idx_kl_active ON knowledge_library(is_active);
+CREATE INDEX IF NOT EXISTS idx_kl_kind ON knowledge_library(kind);
+CREATE INDEX IF NOT EXISTS idx_kl_scope ON knowledge_library(scope);
+CREATE INDEX IF NOT EXISTS idx_kl_service_line ON knowledge_library(service_line);
+
+CREATE TABLE IF NOT EXISTS clarifications (
+    id                 INTEGER PRIMARY KEY AUTOINCREMENT,
+    queue_id           INTEGER NOT NULL REFERENCES teaching_queue(id) ON DELETE CASCADE,
+    question_text      TEXT NOT NULL,
+    options_json       TEXT NOT NULL DEFAULT '[]',   -- [] means freetext
+    target_unit_index  INTEGER NOT NULL,             -- which unit in the queue row this belongs to
+    unit_preview       TEXT,                         -- snippet of the ambiguous unit content
+    answer             TEXT,
+    status             TEXT NOT NULL CHECK (status IN ('pending','answered','skipped'))
+                                            DEFAULT 'pending',
+    asked_at           TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+    answered_at        TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_clar_status ON clarifications(status);
+CREATE INDEX IF NOT EXISTS idx_clar_queue ON clarifications(queue_id);
+
+-- Keep knowledge_library.updated_at fresh (parallels drafts_touch_updated_at)
+DROP TRIGGER IF EXISTS kl_touch_updated_at;
+CREATE TRIGGER kl_touch_updated_at
+AFTER UPDATE ON knowledge_library
+FOR EACH ROW
+WHEN NEW.updated_at = OLD.updated_at
+BEGIN
+    UPDATE knowledge_library SET updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id = NEW.id;
+END;
+
+-- ---------------------------------------------------------------------------
 -- Dashboard users — bcrypt-hashed passwords, simple role model.
 --
 -- role:

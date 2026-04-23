@@ -6,10 +6,12 @@ anika.db
 anika.db-journal
 anika.db-wal
 anika.db-shm
+anika.db.backup-*
 token.json
 credentials.json
 cloudflared.exe
 data/logs/*.log
+data/uploads/
 .pytest_cache/
 *.egg-info/
 .mypy_cache/

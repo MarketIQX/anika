@@ -85,9 +85,10 @@ def init_db(db_path: Path | str | None = None) -> sqlite3.Connection:
     # Post-v1 column migrations.
     _ensure_column(conn, "raw_emails", "is_web_form", "INTEGER NOT NULL DEFAULT 0")
 
-    # Create vec0 virtual table — depends on sqlite-vec being loaded.
-    # Why a separate table: vec0 is a virtual table backed by the extension;
-    # it's keyed by memory_id so we can join back to memory on retrieval.
+    # Create vec0 virtual tables — depend on sqlite-vec being loaded.
+    # memory_vec backs the original `memory` table.
+    # knowledge_library_vec backs the new user-taught `knowledge_library` rows —
+    # separate so retrieval can filter by table without joining through memory.
     conn.execute(
         f"""
         CREATE VIRTUAL TABLE IF NOT EXISTS memory_vec USING vec0(
@@ -96,20 +97,27 @@ def init_db(db_path: Path | str | None = None) -> sqlite3.Connection:
         )
         """
     )
+    conn.execute(
+        f"""
+        CREATE VIRTUAL TABLE IF NOT EXISTS knowledge_library_vec USING vec0(
+            library_id INTEGER PRIMARY KEY,
+            embedding FLOAT[{EMBEDDING_DIM}]
+        )
+        """
+    )
 
-    # Seed a default system_state kill switch if absent.
-    conn.execute(
-        "INSERT OR IGNORE INTO system_state(key, value) VALUES ('kill_switch','off')"
-    )
-    conn.execute(
-        "INSERT OR IGNORE INTO system_state(key, value) VALUES ('last_gmail_history_id','')"
-    )
-    conn.execute(
-        "INSERT OR IGNORE INTO system_state(key, value) VALUES ('daily_sent_count','0')"
-    )
-    conn.execute(
-        "INSERT OR IGNORE INTO system_state(key, value) VALUES ('daily_sent_date','')"
-    )
+    # Seed default system_state keys if absent.
+    for key, value in [
+        ("kill_switch", "off"),
+        ("drafting_paused", "off"),       # new — pauses only the drafting pipeline
+        ("last_gmail_history_id", ""),
+        ("daily_sent_count", "0"),
+        ("daily_sent_date", ""),
+    ]:
+        conn.execute(
+            "INSERT OR IGNORE INTO system_state(key, value) VALUES (?, ?)",
+            (key, value),
+        )
 
     return conn
 

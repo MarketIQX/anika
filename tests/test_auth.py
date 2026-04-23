@@ -132,10 +132,15 @@ def test_healthz_is_public(client):
 
 # -------- role-based access --------
 
-def test_user_role_cannot_access_train(seeded_users, client):
+def test_user_role_can_access_train(seeded_users, client):
+    """/train is now open to user role — Prakasha sir uses it to teach Anika.
+    (Admin-only sections within /train — the legacy prompt versions table,
+    the Latest-drafter-prompt preview — are hidden by the template, covered
+    in test_train_routes.py::test_admin_sees_prompt_preview_link.)
+    """
     client.post("/login", data={"email": PK_EMAIL, "password": PK_PW})
     r = client.get("/train", follow_redirects=False)
-    assert r.status_code == 403
+    assert r.status_code == 200
 
 
 def test_user_role_cannot_access_analytics(seeded_users, client):

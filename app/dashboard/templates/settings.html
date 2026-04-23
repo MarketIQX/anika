@@ -26,6 +26,25 @@
     </form>
   </div>
 
+  {% if current_user.is_admin %}
+  <div class="bg-white border border-slate-200 rounded-lg p-4">
+    <div class="text-xs text-slate-500 uppercase tracking-wide mb-2">Drafting pause</div>
+    <div class="text-xs text-slate-600 mb-3">
+      Finer than kill switch — incoming emails still ingest + classify, but no drafts are produced. Use while actively teaching Anika.
+    </div>
+    <form method="post" action="/settings/drafting_paused" class="flex gap-2">
+      {% if cap_status and cap_status.cap is defined %}{# placeholder for layout #}{% endif %}
+      {% set paused = kwargs_paused if false else None %}
+      <input type="hidden" name="turn" value="on" />
+      <button class="px-3 py-1.5 bg-amber-600 text-white rounded text-sm" type="submit">Pause drafting</button>
+    </form>
+    <form method="post" action="/settings/drafting_paused" class="mt-2 flex gap-2">
+      <input type="hidden" name="turn" value="off" />
+      <button class="px-3 py-1.5 bg-emerald-600 text-white rounded text-sm" type="submit">Resume drafting</button>
+    </form>
+  </div>
+  {% endif %}
+
   <div class="bg-white border border-slate-200 rounded-lg p-4">
     <div class="text-xs text-slate-500 uppercase tracking-wide mb-2">Gmail connection</div>
     <div class="text-sm mb-3">

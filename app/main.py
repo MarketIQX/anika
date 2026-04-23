@@ -26,7 +26,7 @@ from app.auth.routes import router as auth_router
 from app.config import get_settings
 from app.dashboard.routes import router as dashboard_router
 from app.db import init_db
-from app.jobs import backfill_memory, poll_gmail
+from app.jobs import backfill_memory, poll_gmail, seed_library
 
 logger = logging.getLogger(__name__)
 
@@ -51,7 +51,17 @@ async def lifespan(app: FastAPI):
     except Exception as e:  # noqa: BLE001
         logger.exception("user seed failed: %s", e)
 
+    # First-boot knowledge_library seed from any approved sent-log reply.
+    try:
+        seed_library.maybe_seed_from_sent_log()
+    except Exception as e:  # noqa: BLE001
+        logger.exception("library seed failed: %s", e)
+
     poll_gmail.start()
+    logger.info(
+        "Drafter runtime assembly ACTIVE — prompt built from knowledge_library "
+        "+ retrieved examples + locked signature"
+    )
     logger.info(
         "Anika ready. Dashboard at http://%s:%s  |  Test mode: %s",
         settings.anika_host, settings.anika_port, settings.anika_test_mode,

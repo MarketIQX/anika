@@ -1,9 +1,24 @@
-"""Drafter agent — writes the reply in Prakash sir's voice.
+"""Drafter — writes the reply, using a prompt assembled at runtime.
 
-Uses GPT-4o (higher-quality writing), structured output (DrafterOutput), and
-tools for firm facts, tone rules, FAQ answers, signature block, and few-shot
-retrieval. The agent is expected to call these tools — that's how it grounds
-its draft in real firm data rather than hallucinated guesses.
+Old design (v1): a single static prompt stored in agent_prompts.
+
+New design (v2 / Phase 1A):
+  For every draft, we BUILD the prompt from:
+    1. DRAFTER_HEADER          — hardcoded identity + voice-mirror instructions
+    2. rules / policies        — retrieved from knowledge_library (universal +
+                                 matched service_line)
+    3. examples                — top-k semantically similar approved drafts
+                                 retrieved from knowledge_library
+    4. facts                   — retrieved from knowledge_library
+    5. SIGNATURE_INSTRUCTION   — the locked signature block (firm_identity)
+    6. OUTPUT_SCHEMA           — DrafterOutput schema hint
+
+Every assembly is logged to reasoning_log so Admin Prompt Preview can show
+exactly what the model saw.
+
+The legacy `agent_prompts` rows for the drafter are retained for audit but
+ignored by this module — see DEFAULT_INSTRUCTIONS at the bottom, which is
+only used as a fallback if runtime assembly somehow produces nothing.
 """
 from __future__ import annotations
 
@@ -22,88 +37,167 @@ from app.agents.tools_sdk import (
     tool_retrieve_firm_snippets,
     tool_retrieve_similar_drafts,
 )
-from app.cognitive import reasoning_log
-from app.config import get_settings
-from app.db import execute
+from app.cognitive import library, reasoning_log
+from app.config import SIGNATURE_BLOCK, get_settings
+from app.config.firm_identity import ensure_signature
+from app.db import execute, fetch_one
 from app.tools import knowledge_tool
 
 
-DEFAULT_INSTRUCTIONS = """You are Anika's Drafter — writing on behalf of CA S V Prakasha, Senior Partner
-at Balakrishna & Co., a 37-year-old chartered accountancy firm in Bangalore.
-
-Ground-truth rules for every first-reply you draft:
-
-1. SALUTATION: "Dear Mr./Ms. [LastName]," for first contact. If sender name is
-   not clear, use "Dear [FirstName]" as a fallback. Do NOT use "Hi".
-2. SECOND SENTENCE must acknowledge the enquiry specifically — what they asked
-   about, in their language.
-3. SIZE: 120–200 words. No more. First replies are warm but tight.
-4. ONE clarifying question max — the key thing you need to proceed.
-5. ONE clear next step — either request specific documents, or offer a short
-   call (15/20/30 min depending on enquiry type — see service-line rules below).
-6. TONE: warm, professional, relationship-first. Indian English spelling
-   (organisation, realise). Never "I hope this email finds you well".
-7. USE THESE TOOLS — don't guess:
-     - tool_get_signature_block — APPEND THIS VERBATIM at the end of every body.
-     - tool_get_tone_rules      — read the active dos/donts.
-     - tool_get_firm_fact       — firm facts (e.g. 'office_address', 'track_record').
-     - tool_get_faq_answers     — verbatim answers for fees/panel/timeline questions.
-     - tool_retrieve_similar_drafts(text, service_line) — 3–4 past approved
-       replies. Mirror their rhythm and phrasing.
-     - tool_retrieve_firm_snippets(text) — positioning points you can cite
-       naturally ("serving clients from 26 countries", "1,500 NRI clients").
-8. DONT'S:
-     - Never quote specific fees. Invite for a consultation.
-     - Never commit to timelines without Prakash sir's approval.
-     - Never give tax/legal opinions in writing — offer a call instead.
-     - Never mention competitors by name.
-     - Never say "we guarantee" anything regulatory.
-     - Never mention other clients by name.
-9. UNCERTAINTY: if you lack a concrete fact, use "[Please confirm with Prakash
-   sir]" inline. Do not fabricate.
-
-Service-line next-step defaults (override if sender specifies):
-  - nri_tax            : Request Form 26AS + offer 15-min call
-  - foreign_subsidiary : Offer 20-min strategy call (no travel needed)
-  - transfer_pricing   : Request prior TP documentation (if any) + offer 20-min call
-  - virtual_cfo        : Offer 30-min discovery call
-  - gst_indirect       : Request PAN + address proof + 15-min setup call
-  - secretarial_roc    : Offer 15-min call to understand scope
-  - audit              : Offer 20-min call to scope audit engagement
-
-Output MUST match DrafterOutput:
-  - subject: "Re: <original subject>"
-  - body   : plain-text reply ending with the signature block verbatim
-  - tone_notes: one sentence on the voice choices you made
-  - reasoning : short explanation of structural/content decisions
-"""
+# --------------------------------------------------------------------------
+# Static / hardcoded pieces — these are code, not DB rows. They DO NOT
+# appear in agent_prompts; changing them is a code change.
+# --------------------------------------------------------------------------
 
 
-def _instructions() -> tuple[str, int | None]:
-    p = knowledge_tool.get_active_prompt("drafter")
-    if p:
-        return p["prompt_text"], int(p["version"])
-    return DEFAULT_INSTRUCTIONS, None
+DRAFTER_HEADER = """You are Anika's Drafter — writing on behalf of CA Prakasha,
+Senior Partner at Balakrishna & Co.
+
+YOUR JOB: Mirror CA Prakasha's demonstrated voice. You are NOT the author —
+he is. Study the retrieved rules, examples, and facts below and produce a
+new draft that he would recognise as his own words.
+
+Mirror from the retrieved examples:
+  - Salutation pattern
+  - Opening sentence
+  - Structure (paragraphs vs bullets vs framework)
+  - Fee disclosure approach (almost always: do not quote specific fees)
+  - Closing and sign-off pattern
+
+HARD RULES:
+  - Never fabricate facts, numbers, or events not in the current email or
+    the retrieved facts below.
+  - Never reference prior conversations that aren't explicitly mentioned.
+  - Never mention competitors by name.
+  - Never guarantee regulatory outcomes.
+  - Use Indian English spelling (organisation, realise, favour).
+
+If no service-line examples were retrieved, use neutral professional Indian
+business English and note in `reasoning`: "No voice samples found for this
+service line — recommend training Anika on this type.\""""
 
 
-def _build_agent() -> tuple[Agent, int | None]:
-    text, version = _instructions()
-    agent = Agent(
+SIGNATURE_INSTRUCTION = f"""End every draft body with EXACTLY this signature block, verbatim, with no modifications and nothing after it:
+
+{SIGNATURE_BLOCK}
+
+Do not change the phone number, name, or any line. Do not add anything after this block."""
+
+
+OUTPUT_SCHEMA_HINT = """Return JSON matching DrafterOutput exactly:
+  subject     — "Re: <original subject>" unless the orchestrator set a
+                fresh subject (web-form enquiries receive a clean subject).
+  body        — plain-text body ending with the signature block above.
+  tone_notes  — one sentence on the voice choices you made.
+  reasoning   — 1–3 sentences on structural/content decisions, naming the
+                example memory ids you mirrored (if any)."""
+
+
+# Legacy fallback — only used if knowledge_library is totally empty. Even
+# then the orchestrator should be training Anika before sends go out.
+DEFAULT_INSTRUCTIONS = (
+    DRAFTER_HEADER
+    + "\n\n[No rules, examples, or facts yet in knowledge_library — "
+    + "teach Anika first. See /train.]\n\n"
+    + SIGNATURE_INSTRUCTION
+    + "\n\n"
+    + OUTPUT_SCHEMA_HINT
+)
+
+
+# --------------------------------------------------------------------------
+# Runtime prompt assembly
+# --------------------------------------------------------------------------
+
+
+def _format_rules(rows: list[dict[str, Any]]) -> str:
+    if not rows:
+        return ""
+    lines = []
+    for r in rows:
+        tag = "universal" if r["scope"] == "universal" else f"[{r.get('service_line') or 'service'}]"
+        lines.append(f"- {tag} ({r['kind']}) [id={r['id']}]: {r['content']}")
+    return "RULES & POLICIES (retrieved):\n" + "\n".join(lines)
+
+
+def _format_examples(rows: list[dict[str, Any]]) -> str:
+    if not rows:
+        return "EXAMPLES: (none retrieved — voice samples are missing for this service)"
+    parts = ["EXAMPLES OF CA PRAKASHA'S VOICE (retrieved — mirror these):"]
+    for r in rows:
+        tag = f"[id={r['id']}"
+        if r.get("service_line"):
+            tag += f" · {r['service_line']}"
+        tag += "]"
+        parts.append(f"\n--- example {tag} ---\n{r['content']}")
+    return "\n".join(parts)
+
+
+def _format_facts(rows: list[dict[str, Any]]) -> str:
+    if not rows:
+        return ""
+    lines = ["FIRM FACTS (retrieved):"]
+    for r in rows:
+        scope = r.get("scope", "universal")
+        tag = "universal" if scope == "universal" else f"[{r.get('service_line')}]"
+        lines.append(f"- {tag} [id={r['id']}]: {r['content']}")
+    return "\n".join(lines)
+
+
+def assemble_prompt(
+    *,
+    service_line: str | None,
+    enquiry_body: str,
+) -> tuple[str, list[int]]:
+    """Build the Drafter prompt at runtime. Returns (prompt_text, used_library_ids).
+
+    used_library_ids lists every knowledge_library row that went into the
+    prompt, so the orchestrator can bump applied_count after the draft lands.
+    """
+    rules = library.retrieve_rules(service_line)
+    facts = library.retrieve_facts(service_line)
+    # Semantic retrieval for examples — keyed by the actual enquiry body.
+    examples = library.retrieve_examples(
+        query_text=enquiry_body[:2000],
+        service_line=service_line,
+        top_k=5,
+    )
+
+    sections = [
+        DRAFTER_HEADER,
+        _format_rules(rules),
+        _format_examples(examples),
+        _format_facts(facts),
+        SIGNATURE_INSTRUCTION,
+        OUTPUT_SCHEMA_HINT,
+    ]
+    prompt = "\n\n".join(s for s in sections if s)
+
+    ids = [r["id"] for r in rules] + [r["id"] for r in examples] + [r["id"] for r in facts]
+    return prompt, ids
+
+
+# --------------------------------------------------------------------------
+# Agent build + runner
+# --------------------------------------------------------------------------
+
+
+def _build_agent(instructions: str) -> Agent:
+    return Agent(
         name="Drafter",
-        instructions=text,
+        instructions=instructions,
         model=get_settings().openai_model_drafter,
         tools=[
             tool_get_signature_block,
             tool_get_tone_rules,
             tool_get_firm_fact,
             tool_get_faq_answers,
-            tool_retrieve_similar_drafts,
+            tool_retrieve_similar_drafts,   # legacy memory table — kept as supplementary
             tool_retrieve_firm_snippets,
             tool_get_routing_partner,
         ],
         output_type=DrafterOutput,
     )
-    return agent, version
 
 
 async def draft_reply(
@@ -120,11 +214,13 @@ async def draft_reply(
 ) -> int:
     """Generate a draft and insert it into `drafts`. Returns the drafts.id.
 
-    If `edit_instruction` is provided, the Drafter is asked to revise the
-    `previous_draft_body` per Prakash sir's instruction — used by the
-    Approver's 'edit' path.
+    For revisions (edit_instruction + previous_draft_body), the Drafter is
+    asked to revise the previous draft per Prakasha sir's instruction.
     """
-    agent, version = _build_agent()
+    service_line = enrichment.likely_service_line
+    prompt, used_ids = assemble_prompt(service_line=service_line, enquiry_body=body_plain)
+
+    agent = _build_agent(prompt)
     payload: dict[str, Any] = {
         "from_email": from_email,
         "from_name": from_name,
@@ -138,7 +234,7 @@ async def draft_reply(
             "edit_instruction": edit_instruction,
         }
         user_prompt = (
-            "Revise the previous draft per Prakash sir's edit instruction. "
+            "Revise the previous draft per CA Prakasha's edit instruction. "
             "Preserve the signature. Return JSON matching DrafterOutput.\n\n"
             + json.dumps(payload, ensure_ascii=False)
         )
@@ -150,23 +246,22 @@ async def draft_reply(
 
     with reasoning_log.timed(
         agent_name="drafter",
-        input_obj=payload,
+        input_obj={
+            "payload": payload,
+            "assembled_prompt": prompt,           # full prompt for admin preview
+            "used_library_ids": used_ids,
+            "runtime_assembly": True,
+        },
         email_id=email_id,
         model=get_settings().openai_model_drafter,
-        prompt_version=version,
     ) as ctx:
-        # Why 16: drafter has 7 tools and tends to retrieve exemplars, firm
-        # snippets, tone rules, and signature separately; 16 turns is ample.
         result = await Runner.run(agent, input=user_prompt, max_turns=16)
         output: DrafterOutput = result.final_output  # type: ignore[assignment]
         ctx["output"] = output.model_dump()
         ctx["reasoning"] = output.reasoning
 
-    # Safety: if the Drafter forgot the signature, append it.
-    sig = knowledge_tool.get_signature_block()
-    body = output.body
-    if sig and sig.strip() not in body:
-        body = f"{body.rstrip()}\n\n{sig}"
+    # Backstop: force the signature block if the drafter omitted/edited it.
+    body = ensure_signature(output.body)
 
     cur = execute(
         """
@@ -182,8 +277,12 @@ async def draft_reply(
             body,
             output.tone_notes,
             get_settings().openai_model_drafter,
-            version,
+            None,                 # prompt_version no longer meaningful — prompt is assembled
             output.reasoning,
         ),
     )
-    return int(cur.lastrowid)
+    draft_id = int(cur.lastrowid)
+
+    # Credit every library entry that went into this draft.
+    library.bump_applied(used_ids)
+    return draft_id

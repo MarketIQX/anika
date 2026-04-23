@@ -31,7 +31,7 @@ from app.agents.schemas import Category, EnricherOutput
 from app.cognitive import reasoning_log
 from app.config import get_settings
 from app.db import execute, fetch_one
-from app.guardrails import kill_switch, topic_blacklist, vip_filter
+from app.guardrails import drafting_paused, kill_switch, topic_blacklist, vip_filter
 from app.tools import gmail_tool, notify_tool, web_form_parser
 from app.tools.gmail_tool import InboxMessage
 
@@ -188,6 +188,21 @@ async def handle(msg: InboxMessage) -> dict[str, Any]:
         )
         _try_mark_processed(msg.message_id)
         return {"email_id": email_id, "action": "bypass_vip", "reason": vip_reason}
+
+    # Hard safety gate #4 — drafting_paused (finer than kill_switch; lets the
+    # dashboard keep ingesting and classifying while training is in progress).
+    if drafting_paused.is_on():
+        reasoning_log.log(
+            agent_name="orchestrator",
+            input_obj={"email_id": email_id, "is_web_form": is_web_form},
+            output_obj={"action": "skip_drafting_paused",
+                        "category": category},
+            reasoning_text="drafting_paused=on; skipping Drafter, no draft created",
+            email_id=email_id,
+        )
+        _try_mark_processed(msg.message_id)
+        return {"email_id": email_id, "action": "skip_drafting_paused",
+                "category": category, "is_web_form": is_web_form}
 
     # Drafter — write the reply.
     # For web forms we've already set a clean subject ("Your enquiry to

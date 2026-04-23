@@ -16,7 +16,10 @@ from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
-PROJECT_ROOT = Path(__file__).resolve().parent.parent
+# app/config/settings.py   → .parent = app/config/   → .parent.parent = app/
+# → .parent.parent.parent = project root. (This file used to live at
+# app/config.py so the old code only needed two .parents.)
+PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 
 
 class Settings(BaseSettings):

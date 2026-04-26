@@ -49,3 +49,61 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
                 "Strict-Transport-Security", "max-age=15552000; includeSubDomains"
             )
         return response
+
+
+# ---------------------------------------------------------------------
+# Page-visit logger (Phase 1B+)
+# ---------------------------------------------------------------------
+
+# Paths to skip (high-frequency / low-value)
+_SKIP_PATHS_EXACT = {
+    "/favicon.ico",
+    "/login",
+    "/logout",
+}
+_SKIP_PREFIXES = (
+    "/static/",
+    "/_static/",
+)
+
+
+class PageVisitLoggerMiddleware(BaseHTTPMiddleware):
+    """Log every authenticated GET request to access_log.
+
+    Why: action-only logging (POSTs) misses the user's exploration pattern
+    (which tabs they viewed, which drafts they opened). This gives us a
+    complete navigation timeline per partner.
+
+    Skips: login/logout (no user yet), favicon, static assets, non-GET
+    methods (POSTs are already logged via access_log.log() in route handlers).
+    """
+
+    async def dispatch(self, request: Request, call_next) -> Response:
+        # Pass-through: only log GETs we care about
+        should_log = (
+            request.method == "GET"
+            and request.url.path not in _SKIP_PATHS_EXACT
+            and not any(request.url.path.startswith(p) for p in _SKIP_PREFIXES)
+        )
+
+        response = await call_next(request)
+
+        if should_log:
+            # Resolve user from session — same pattern as auth middleware uses
+            try:
+                user_email = request.session.get("user_email") if hasattr(request, "session") else None
+                if user_email:
+                    # Lazy import to avoid circulars at module load time
+                    from app.auth import access_log
+                    access_log.log(
+                        action="page_visit",
+                        user_email=user_email,
+                        target=request.url.path,
+                        ip_address=request.client.host if request.client else None,
+                        user_agent=request.headers.get("user-agent"),
+                    )
+            except Exception:
+                # Never let logging break the response
+                pass
+
+        return response

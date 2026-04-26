@@ -21,7 +21,7 @@ from fastapi.staticfiles import StaticFiles
 from starlette.middleware.sessions import SessionMiddleware
 
 from app.auth import bootstrap as auth_bootstrap
-from app.auth.middleware import SecurityHeadersMiddleware
+from app.auth.middleware import PageVisitLoggerMiddleware, SecurityHeadersMiddleware
 from app.auth.routes import router as auth_router
 from app.config import get_settings
 from app.dashboard.routes import router as dashboard_router
@@ -88,6 +88,7 @@ def create_app() -> FastAPI:
     )
     # Security headers wrap everything (added last so it's outermost).
     app.add_middleware(SecurityHeadersMiddleware, hsts_enabled=s.session_cookie_secure)
+    app.add_middleware(PageVisitLoggerMiddleware)
 
     # Auth routes first (they are public).
     app.include_router(auth_router)

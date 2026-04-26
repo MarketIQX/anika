@@ -31,7 +31,7 @@ from app.agents.schemas import Category, EnricherOutput
 from app.cognitive import reasoning_log
 from app.config import get_settings
 from app.db import execute, fetch_one
-from app.guardrails import drafting_paused, kill_switch, topic_blacklist, vip_filter
+from app.guardrails import drafting_paused, kill_switch, structural_validator, topic_blacklist, vip_filter
 from app.tools import gmail_tool, notify_tool, web_form_parser
 from app.tools.gmail_tool import InboxMessage
 
@@ -144,6 +144,39 @@ async def handle(msg: InboxMessage) -> dict[str, Any]:
         _try_mark_processed(msg.message_id)
         return {"email_id": email_id, "action": "bypass_sensitive", "reason": reason}
 
+    # Hard safety gate #5 — Structural validator (Apple-style).
+    # Rejects non-enquiries BEFORE spending an LLM call. If structure says no,
+    # we log + mark processed + skip. Website forms bypass (is_web_form=True).
+    sv_ok, sv_reason = structural_validator.validate(
+        from_email=msg.from_email,
+        subject=msg.subject,
+        body_plain=msg.body_plain,
+        raw_headers=getattr(msg, "raw_headers", None),
+        is_web_form=is_web_form,
+    )
+    if not sv_ok:
+        reasoning_log.log(
+            agent_name="orchestrator",
+            input_obj={
+                "email_id": email_id,
+                "from_email": msg.from_email,
+                "subject": msg.subject,
+            },
+            output_obj={
+                "action": "skip_structural_validator",
+                "reason": sv_reason,
+            },
+            reasoning_text=f"structural validator rejected: {sv_reason}",
+            email_id=email_id,
+        )
+        _try_mark_processed(msg.message_id)
+        return {
+            "email_id": email_id,
+            "action": "skip_structural_validator",
+            "reason": sv_reason,
+            "is_web_form": is_web_form,
+        }
+
     # Classifier first — agentic decision.
     cls = await classifier.classify(
         email_id=email_id,
@@ -156,15 +189,25 @@ async def handle(msg: InboxMessage) -> dict[str, Any]:
     category: Category = cls.category
 
     if category not in ("new_enquiry", "existing_client"):
+        # Specific reason text per category for clarity in audit logs
+        reason_map = {
+            "recruitment_enquiry": "job/career enquiry — not a client services request",
+            "vendor_pitch": "vendor sales pitch — not a client services request",
+            "spam": "classified as spam",
+            "automated": "automated/system message",
+            "sensitive": "sensitive content — handle personally",
+            "other": "does not fit drafting criteria",
+        }
+        skip_reason = reason_map.get(category, "non-enquiry")
         reasoning_log.log(
             agent_name="orchestrator",
             input_obj={"email_id": email_id, "is_web_form": is_web_form},
-            output_obj={"action": "skip_non_enquiry", "category": category},
-            reasoning_text=f"category={category}, Anika does not draft for non-enquiries",
+            output_obj={"action": "skip_non_enquiry", "category": category, "reason": skip_reason},
+            reasoning_text=f"category={category}: {skip_reason}; Anika does not draft",
             email_id=email_id,
         )
         _try_mark_processed(msg.message_id)
-        return {"email_id": email_id, "action": "skip_non_enquiry", "category": category}
+        return {"email_id": email_id, "action": "skip_non_enquiry", "category": category, "reason": skip_reason}
 
     # Enricher — sender intelligence + service line.
     enr: EnricherOutput = await enricher.enrich(

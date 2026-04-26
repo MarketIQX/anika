@@ -18,6 +18,8 @@ Category = Literal[
     "new_enquiry",
     "existing_client",
     "sensitive",
+    "recruitment_enquiry",
+    "vendor_pitch",
     "automated",
     "spam",
     "other",

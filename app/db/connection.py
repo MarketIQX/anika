@@ -82,8 +82,35 @@ def init_db(db_path: Path | str | None = None) -> sqlite3.Connection:
     schema_sql = SCHEMA_PATH.read_text(encoding="utf-8")
     conn.executescript(schema_sql)
 
-    # Post-v1 column migrations.
+    # Post-v1 column migrations. Every column declared in schema.sql AFTER its
+    # CREATE TABLE was first shipped needs a matching ALTER TABLE here, so
+    # databases created on an older schema get the column on next boot.
+    # Phase 1A / web-form era:
     _ensure_column(conn, "raw_emails", "is_web_form", "INTEGER NOT NULL DEFAULT 0")
+    # Phase 1B Cluster 2 — promoted from runtime ALTERs in scratch scripts.
+    # NOTE: types here intentionally OMIT `NOT NULL` — they must match the live
+    # DB shape produced by the original ALTER TABLE statements (which SQLite
+    # always allows to be nullable). Anything stricter would mean the schema
+    # describes one shape and the live DB has another.
+    _ensure_column(conn, "drafts", "cognitive_state", "TEXT DEFAULT NULL")
+    _ensure_column(conn, "drafts", "voice_coverage_count", "INTEGER DEFAULT 0")
+    _ensure_column(conn, "memory", "is_active", "INTEGER DEFAULT 1")
+    # knowledge_library — purpose-classification columns:
+    _ensure_column(conn, "knowledge_library", "purpose", "TEXT DEFAULT 'voice_example'")
+    _ensure_column(conn, "knowledge_library", "anika_proposed_purpose", "TEXT DEFAULT NULL")
+    _ensure_column(conn, "knowledge_library", "anika_proposed_confidence", "REAL DEFAULT NULL")
+    _ensure_column(conn, "knowledge_library", "anika_reasoning", "TEXT DEFAULT NULL")
+    _ensure_column(conn, "knowledge_library", "user_confirmed_purpose", "TEXT DEFAULT NULL")
+    _ensure_column(conn, "knowledge_library", "custom_purpose_label", "TEXT DEFAULT NULL")
+    _ensure_column(conn, "knowledge_library", "is_custom_purpose", "INTEGER DEFAULT 0")
+    # teaching_queue — confirmation-flow columns:
+    _ensure_column(conn, "teaching_queue", "anika_proposed_purpose", "TEXT DEFAULT NULL")
+    _ensure_column(conn, "teaching_queue", "anika_proposed_confidence", "REAL DEFAULT NULL")
+    _ensure_column(conn, "teaching_queue", "anika_reasoning", "TEXT DEFAULT NULL")
+    _ensure_column(conn, "teaching_queue", "anika_suggested_sl", "TEXT DEFAULT NULL")
+    _ensure_column(conn, "teaching_queue", "anika_suggested_custom", "TEXT DEFAULT NULL")
+    _ensure_column(conn, "teaching_queue", "humility_articulation", "TEXT DEFAULT NULL")
+    _ensure_column(conn, "teaching_queue", "awaiting_confirmation", "INTEGER DEFAULT 1")
 
     # Create vec0 virtual tables — depend on sqlite-vec being loaded.
     # memory_vec backs the original `memory` table.

@@ -108,7 +108,16 @@ CREATE TABLE IF NOT EXISTS drafts (
     prompt_version  INTEGER,
     reasoning       TEXT,
     created_at      TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
-    updated_at      TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+    updated_at      TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+    -- Phase 1B cognitive-state columns (Cluster 2 — promoted from runtime ALTER).
+    -- Position at end matches live DB column order (PRAGMA table_info parity).
+    -- cognitive_state ∈ {'cold_start','learning','learned'} or NULL on legacy rows.
+    -- Set by drafter.assemble_prompt() based on library.voice_coverage().
+    -- (Nullable to match live DB shape from runtime ALTER TABLE history.)
+    cognitive_state      TEXT DEFAULT NULL,
+    -- Number of voice_example rows that backed this draft (joined to service_line).
+    -- 0 ⇒ cold_start, 1-2 ⇒ learning, 3+ ⇒ learned.
+    voice_coverage_count INTEGER DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS idx_drafts_email ON drafts(email_id);
 CREATE INDEX IF NOT EXISTS idx_drafts_status ON drafts(sent_status);
@@ -173,7 +182,13 @@ CREATE TABLE IF NOT EXISTS memory (
     source_draft_id INTEGER REFERENCES drafts(id),
     tags            TEXT,                      -- JSON array of lowercase tags
     embedding_model TEXT NOT NULL,
-    created_at      TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+    created_at      TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+    -- Soft-delete flag (Phase 1B Cluster 2 — promoted from runtime ALTER).
+    -- Position at end matches live DB column order (PRAGMA table_info parity).
+    -- 0 = deactivated; semantic_search filters on this so legacy seed rows
+    -- can be retired without losing their forensic content.
+    -- (Nullable to match live DB shape from runtime ALTER TABLE.)
+    is_active       INTEGER DEFAULT 1
 );
 CREATE INDEX IF NOT EXISTS idx_memory_service ON memory(service_line);
 CREATE INDEX IF NOT EXISTS idx_memory_kind ON memory(kind);
@@ -311,7 +326,25 @@ CREATE TABLE IF NOT EXISTS teaching_queue (
     error_text       TEXT,                -- populated on 'failed'
     created_by_user  TEXT NOT NULL,
     created_at       TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
-    processed_at     TEXT
+    processed_at     TEXT,
+    -- Phase 1B confirmation-flow columns (Cluster 2 — promoted from runtime ALTER).
+    -- Position at end matches live DB column order (PRAGMA table_info parity).
+    -- Anika proposes a purpose for each upload and waits for user confirmation
+    -- before promoting the unit into knowledge_library. These columns capture
+    -- the proposal + the human-articulated uncertainty for the UI.
+    -- (Columns nullable to match live DB shape from runtime ALTER TABLE history.)
+    anika_proposed_purpose    TEXT DEFAULT NULL,
+    anika_proposed_confidence REAL DEFAULT NULL,
+    anika_reasoning           TEXT DEFAULT NULL,
+    anika_suggested_sl        TEXT DEFAULT NULL,
+    anika_suggested_custom    TEXT DEFAULT NULL,
+    -- Output of the humility_layer agent: a 1-paragraph "what I noticed,
+    -- what confuses me, what I would ask" articulation rendered on the
+    -- Awaiting-Confirmation card.
+    humility_articulation     TEXT DEFAULT NULL,
+    -- 1 = waiting on user to confirm the proposed purpose; 0 = confirmed
+    -- (and a knowledge_library row should now exist).
+    awaiting_confirmation     INTEGER DEFAULT 1
 );
 CREATE INDEX IF NOT EXISTS idx_tq_status ON teaching_queue(status);
 CREATE INDEX IF NOT EXISTS idx_tq_created ON teaching_queue(created_at);
@@ -332,7 +365,25 @@ CREATE TABLE IF NOT EXISTS knowledge_library (
     deleted_by       TEXT,                         -- user email that soft-deleted
     deleted_at       TEXT,
     created_at       TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
-    updated_at       TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+    updated_at       TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+    -- Phase 1B purpose-classification columns (Cluster 2 — promoted from runtime ALTER).
+    -- Position at end matches live DB column order (PRAGMA table_info parity).
+    -- The Phase 1B teaching pipeline classifies each library row by *purpose*:
+    --   voice_example | classifier_example | document_type | question_template |
+    --   workflow_rule | firm_fact | firm_policy | reference_material
+    -- The Drafter only retrieves entries whose purpose matches what it needs.
+    -- (Columns nullable to match live DB shape from runtime ALTER TABLE history.)
+    purpose                   TEXT DEFAULT 'voice_example',
+    -- Anika's auto-proposed purpose + reasoning, before user confirmation.
+    -- Surfaced in the "Awaiting your confirmation" UI section.
+    anika_proposed_purpose    TEXT DEFAULT NULL,
+    anika_proposed_confidence REAL DEFAULT NULL,
+    anika_reasoning           TEXT DEFAULT NULL,
+    -- The user's confirmed (or corrected) purpose. NULL until confirmation lands.
+    user_confirmed_purpose    TEXT DEFAULT NULL,
+    -- For purposes the user typed manually rather than choosing from the list.
+    custom_purpose_label      TEXT DEFAULT NULL,
+    is_custom_purpose         INTEGER DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS idx_kl_active ON knowledge_library(is_active);
 CREATE INDEX IF NOT EXISTS idx_kl_kind ON knowledge_library(kind);
@@ -354,6 +405,33 @@ CREATE TABLE IF NOT EXISTS clarifications (
 );
 CREATE INDEX IF NOT EXISTS idx_clar_status ON clarifications(status);
 CREATE INDEX IF NOT EXISTS idx_clar_queue ON clarifications(queue_id);
+
+-- ---------------------------------------------------------------------------
+-- meta_rules — Phase 1B "rules about how Anika rules". Generated by the
+-- meta_rule_generator agent when a user-confirmed correction implies a rule
+-- that should fire on future inputs (e.g. "every queue item whose body
+-- mentions GST without service_line should default to gst_indirect").
+--
+-- Phase 1B Cluster 2 — promoted from runtime CREATE TABLE in scratch scripts.
+-- ---------------------------------------------------------------------------
+
+CREATE TABLE IF NOT EXISTS meta_rules (
+    id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+    rule_text           TEXT NOT NULL,           -- human-readable statement of the rule
+    trigger_pattern     TEXT,                    -- substring/regex that activates the rule
+    target_purpose      TEXT NOT NULL,           -- which library purpose this rule applies to
+    target_service_line TEXT,                    -- optional service-line filter
+    priority            INTEGER DEFAULT 0,
+    is_active           INTEGER DEFAULT 1,
+    applied_count      INTEGER DEFAULT 0,
+    created_by          TEXT NOT NULL,           -- user email (or 'meta_rule_generator')
+    deleted_by          TEXT,
+    deleted_at          TEXT,
+    created_at          TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+    updated_at          TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+);
+CREATE INDEX IF NOT EXISTS idx_meta_active ON meta_rules(is_active);
+CREATE INDEX IF NOT EXISTS idx_meta_purpose ON meta_rules(target_purpose);
 
 -- Keep knowledge_library.updated_at fresh (parallels drafts_touch_updated_at)
 DROP TRIGGER IF EXISTS kl_touch_updated_at;

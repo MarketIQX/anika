@@ -1,0 +1,159 @@
+﻿from pathlib import Path
+
+template = r"""{% extends "base.html" %}
+{% block title %}Knowledge Graph | Anika{% endblock %}
+{% block content %}
+
+<div class="max-w-7xl mx-auto">
+
+  <div class="flex items-start justify-between mb-6">
+    <div>
+      <h1 class="text-2xl font-semibold text-slate-900">Knowledge Graph</h1>
+      <p class="text-sm text-slate-600 mt-1">
+        Every dot is something you taught Anika. Lines show connected ideas. Clusters = topics she understands coherently.
+      </p>
+    </div>
+    <div class="flex items-center gap-2">
+      <a href="/teaching-dashboard" class="text-sm text-slate-500 hover:text-slate-900 px-3 py-2">← Back to Progress</a>
+    </div>
+  </div>
+
+  <!-- Stats row -->
+  <div class="grid grid-cols-4 gap-4 mb-6">
+    <div class="bg-white border border-slate-200 rounded-lg p-5">
+      <div class="text-xs uppercase tracking-wide text-slate-500 mb-1">Knowledge nodes</div>
+      <div class="text-3xl font-semibold text-slate-900">{{ stats.total_nodes }}</div>
+      <div class="text-xs text-slate-500 mt-2">Distinct teachings in library</div>
+    </div>
+    <div class="bg-white border border-slate-200 rounded-lg p-5">
+      <div class="text-xs uppercase tracking-wide text-slate-500 mb-1">Connections</div>
+      <div class="text-3xl font-semibold text-slate-900">{{ stats.total_edges }}</div>
+      <div class="text-xs text-slate-500 mt-2">Semantic links (similarity &gt; 0.6)</div>
+    </div>
+    <div class="bg-white border border-slate-200 rounded-lg p-5">
+      <div class="text-xs uppercase tracking-wide text-slate-500 mb-1">Isolated nodes</div>
+      <div class="text-3xl font-semibold {% if stats.isolated > stats.total_nodes / 2 %}text-amber-600{% else %}text-slate-900{% endif %}">
+        {{ stats.isolated }}
+      </div>
+      <div class="text-xs text-slate-500 mt-2">No connections to others yet</div>
+    </div>
+    <div class="bg-white border border-slate-200 rounded-lg p-5">
+      <div class="text-xs uppercase tracking-wide text-slate-500 mb-1">Densest cluster</div>
+      <div class="text-xl font-semibold text-slate-900">{{ stats.densest_purpose or '—' }}</div>
+      <div class="text-xs text-slate-500 mt-2">Where Anika connects ideas most</div>
+    </div>
+  </div>
+
+  <!-- Legend -->
+  <div class="bg-white border border-slate-200 rounded-lg p-4 mb-4">
+    <div class="text-xs uppercase tracking-wide text-slate-500 mb-2">Color legend</div>
+    <div class="flex flex-wrap gap-3 text-xs">
+      {% for purpose, color in purpose_colors.items() %}
+        <div class="flex items-center gap-1.5">
+          <span class="inline-block w-3 h-3 rounded-full" style="background:{{ color }}"></span>
+          <span class="text-slate-700">{{ purpose }}</span>
+        </div>
+      {% endfor %}
+    </div>
+    <p class="text-xs text-slate-500 mt-3">
+      Node size = how often Anika uses this teaching. Line thickness = strength of connection.
+    </p>
+  </div>
+
+  <!-- The SVG graph -->
+  <div class="bg-white border border-slate-200 rounded-lg p-2 mb-4 overflow-hidden">
+    {% if nodes %}
+      <svg viewBox="0 0 800 600" class="w-full" style="min-height: 600px; background: #fafafa;">
+        <!-- Edges first so nodes render on top -->
+        {% for edge in edges %}
+          {% set from_node = None %}
+          {% set to_node = None %}
+          {% for n in nodes %}
+            {% if n.id == edge.from %}{% set from_node = n %}{% endif %}
+            {% if n.id == edge.to %}{% set to_node = n %}{% endif %}
+          {% endfor %}
+          {% if from_node and to_node %}
+            <line x1="{{ from_node.x }}" y1="{{ from_node.y }}"
+                  x2="{{ to_node.x }}" y2="{{ to_node.y }}"
+                  stroke="#CBD5E0" stroke-width="{{ edge.weight * 2 }}" opacity="{{ edge.weight }}" />
+          {% endif %}
+        {% endfor %}
+
+        <!-- Nodes -->
+        {% for n in nodes %}
+          <g class="graph-node" data-id="{{ n.id }}">
+            <circle cx="{{ n.x }}" cy="{{ n.y }}" r="{{ n.size }}"
+                    fill="{{ n.color }}" stroke="white" stroke-width="2"
+                    style="cursor: pointer;"
+                    onmouseover="document.getElementById('detail-{{ n.id }}').style.display='block'"
+                    onmouseout="document.getElementById('detail-{{ n.id }}').style.display='none'">
+              <title>{{ n.purpose }}{% if n.service_line %} · {{ n.service_line }}{% endif %} · used {{ n.applied_count }}x</title>
+            </circle>
+            {% if n.applied_count > 0 %}
+              <text x="{{ n.x }}" y="{{ n.y + 4 }}" text-anchor="middle"
+                    font-size="9" fill="white" font-weight="bold">{{ n.applied_count }}</text>
+            {% endif %}
+          </g>
+        {% endfor %}
+      </svg>
+    {% else %}
+      <div class="text-center py-16 text-slate-500">
+        <p>No library entries yet. Teach Anika something first.</p>
+        <a href="/train" class="inline-block mt-3 bg-slate-900 text-white px-4 py-2 rounded text-sm">Go to Train</a>
+      </div>
+    {% endif %}
+  </div>
+
+  <!-- Node details drawer (shown on hover) -->
+  {% for n in nodes %}
+    <div id="detail-{{ n.id }}"
+         class="hidden fixed bottom-6 right-6 max-w-md bg-slate-900 text-white px-4 py-3 rounded-lg shadow-2xl z-50 pointer-events-none"
+         style="display: none;">
+      <div class="flex items-center gap-2 text-xs mb-1">
+        <span class="inline-block w-2 h-2 rounded-full" style="background:{{ n.color }}"></span>
+        <span class="font-medium">{{ n.purpose }}</span>
+        {% if n.service_line %}<span class="text-slate-400">· {{ n.service_line }}</span>{% endif %}
+        <span class="text-slate-400">· id={{ n.id }}</span>
+      </div>
+      <div class="text-sm">{{ n.content_preview }}{% if n.content_preview|length >= 120 %}…{% endif %}</div>
+      <div class="text-xs text-slate-400 mt-1">Used {{ n.applied_count }} times in drafts</div>
+    </div>
+  {% endfor %}
+
+  <!-- Interpretation guide -->
+  <div class="bg-blue-50 border border-blue-200 rounded-lg p-4 text-sm">
+    <h3 class="font-semibold text-blue-900 mb-2">How to read this graph</h3>
+    <ul class="space-y-1 text-blue-800 text-xs">
+      <li>• <strong>Clusters</strong> (groups of connected dots) show topics Anika understands as a unified whole</li>
+      <li>• <strong>Isolated dots</strong> are teachings that don't connect to anything else — might be outliers or need more context</li>
+      <li>• <strong>Bridges</strong> (dots connecting clusters) are the teachings that tie different topics together</li>
+      <li>• <strong>Larger dots</strong> = teachings Anika uses more often in real drafts</li>
+      <li>• When your graph has <strong>many connections</strong>, it means Anika sees the relationships between your teachings — genuine cognitive growth</li>
+    </ul>
+  </div>
+
+</div>
+
+{% endblock %}
+"""
+
+p = Path("app/dashboard/templates/knowledge_graph.html")
+p.write_text(template, encoding="utf-8")
+print(f"Wrote knowledge_graph.html ({len(template)} chars)")
+
+
+# Add nav link to teaching_dashboard.html — a "See graph" button
+td = Path("app/dashboard/templates/teaching_dashboard.html")
+td_code = td.read_text(encoding="utf-8")
+
+OLD_NAV = '<a href="/train/rules" class="bg-slate-100 hover:bg-slate-200 text-slate-700 px-3 py-2 rounded text-sm font-medium">Manage rules</a>'
+NEW_NAV = '<a href="/knowledge-graph" class="bg-slate-100 hover:bg-slate-200 text-slate-700 px-3 py-2 rounded text-sm font-medium">Knowledge graph</a>\n      <a href="/train/rules" class="bg-slate-100 hover:bg-slate-200 text-slate-700 px-3 py-2 rounded text-sm font-medium">Manage rules</a>'
+
+if NEW_NAV in td_code:
+    print("Nav link already added to dashboard")
+elif OLD_NAV in td_code:
+    td_code = td_code.replace(OLD_NAV, NEW_NAV)
+    td.write_text(td_code, encoding="utf-8")
+    print("Added 'Knowledge graph' link on Teaching Dashboard")
+else:
+    print("Old nav block not found in teaching_dashboard — you may need to add manually")

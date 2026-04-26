@@ -68,6 +68,105 @@ def _ensure_column(conn: sqlite3.Connection, table: str, column: str, type_and_d
         conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {type_and_default}")
 
 
+def _migrate_classifications_check_constraint(conn: sqlite3.Connection) -> None:
+    """Phase 1B Cluster 7f migration.
+
+    The classifications.category CHECK constraint was originally written for
+    a 6-category list (new_enquiry, existing_client, sensitive, automated,
+    spam, other). Phase 1B added 'recruitment_enquiry' and 'vendor_pitch' to
+    the Pydantic Category Literal but the DB CHECK was never updated.
+
+    This migration rewrites the table with the expanded CHECK if the live
+    schema still has the old one. Idempotent: skipped after the first run.
+
+    SQLite has no ALTER TABLE ... DROP CHECK, so we rebuild via the standard
+    "create new, copy, drop, rename" pattern.
+
+    SAFETY (Option α — landed in Cluster 7f):
+      - PRAGMA foreign_keys = OFF must happen OUTSIDE a transaction
+        (SQLite ignores the pragma mid-transaction).
+      - The rebuild itself runs inside an explicit BEGIN/COMMIT so any
+        failure (CREATE / INSERT / DROP / RENAME / index recreation) rolls
+        back atomically — we never end up with both old and new tables, or
+        with the old table dropped before rename succeeded.
+      - Pre-INSERT and post-RENAME row-count assertions: the migration
+        REFUSES to commit if any row was lost in flight.
+      - We use individual conn.execute() calls (not executescript) because
+        executescript auto-commits any open transaction on entry, which
+        would defeat the wrapper.
+    """
+    row = conn.execute(
+        "SELECT sql FROM sqlite_master WHERE type='table' AND name='classifications'"
+    ).fetchone()
+    if not row:
+        return  # fresh DB, classifications doesn't exist yet
+    current_sql = row["sql"] if isinstance(row, dict) else row[0]
+    if "recruitment_enquiry" in (current_sql or ""):
+        return  # already migrated — idempotent
+
+    pre_row = conn.execute("SELECT COUNT(*) AS n FROM classifications").fetchone()
+    pre_count = pre_row["n"] if isinstance(pre_row, dict) else pre_row[0]
+
+    # FK off must be set OUTSIDE a transaction. SQLite docs:
+    #   "It is not possible to enable or disable foreign key support in the
+    #    middle of a multi-statement transaction."
+    conn.execute("PRAGMA foreign_keys = OFF")
+    try:
+        conn.execute("BEGIN")
+        try:
+            conn.execute("""
+                CREATE TABLE classifications_new (
+                    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+                    email_id     INTEGER NOT NULL REFERENCES raw_emails(id) ON DELETE CASCADE,
+                    category     TEXT NOT NULL CHECK (category IN (
+                        'new_enquiry','existing_client','sensitive',
+                        'recruitment_enquiry','vendor_pitch',
+                        'automated','spam','other'
+                    )),
+                    confidence   REAL NOT NULL,
+                    reasoning    TEXT,
+                    model        TEXT NOT NULL,
+                    prompt_version INTEGER,
+                    created_at   TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+                )
+            """)
+            conn.execute("""
+                INSERT INTO classifications_new
+                    SELECT id, email_id, category, confidence, reasoning, model,
+                           prompt_version, created_at FROM classifications
+            """)
+            mid_row = conn.execute(
+                "SELECT COUNT(*) AS n FROM classifications_new"
+            ).fetchone()
+            mid_count = mid_row["n"] if isinstance(mid_row, dict) else mid_row[0]
+            if mid_count != pre_count:
+                raise RuntimeError(
+                    f"classifications migration aborted: INSERT lost rows "
+                    f"(pre={pre_count}, new={mid_count})"
+                )
+            conn.execute("DROP TABLE classifications")
+            conn.execute("ALTER TABLE classifications_new RENAME TO classifications")
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_classifications_email "
+                "ON classifications(email_id)"
+            )
+            post_row = conn.execute(
+                "SELECT COUNT(*) AS n FROM classifications"
+            ).fetchone()
+            post_count = post_row["n"] if isinstance(post_row, dict) else post_row[0]
+            if post_count != pre_count:
+                raise RuntimeError(
+                    f"classifications migration aborted: post-rename count "
+                    f"diverged (pre={pre_count}, post={post_count})"
+                )
+            conn.execute("COMMIT")
+        except Exception:
+            conn.execute("ROLLBACK")
+            raise
+    finally:
+        conn.execute("PRAGMA foreign_keys = ON")
+
+
 def init_db(db_path: Path | str | None = None) -> sqlite3.Connection:
     """Create the schema (idempotent) and return a ready-to-use connection.
 
@@ -87,6 +186,11 @@ def init_db(db_path: Path | str | None = None) -> sqlite3.Connection:
     # databases created on an older schema get the column on next boot.
     # Phase 1A / web-form era:
     _ensure_column(conn, "raw_emails", "is_web_form", "INTEGER NOT NULL DEFAULT 0")
+    # Phase 1B Cluster 7f migration — expand classifications.category CHECK
+    # to include recruitment_enquiry + vendor_pitch (must run BEFORE any
+    # downstream code attempts to insert those values).
+    _migrate_classifications_check_constraint(conn)
+
     # Phase 1B Cluster 2 — promoted from runtime ALTERs in scratch scripts.
     # NOTE: types here intentionally OMIT `NOT NULL` — they must match the live
     # DB shape produced by the original ALTER TABLE statements (which SQLite

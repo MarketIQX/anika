@@ -49,8 +49,17 @@ CREATE INDEX IF NOT EXISTS idx_raw_emails_from ON raw_emails(from_email);
 CREATE TABLE IF NOT EXISTS classifications (
     id           INTEGER PRIMARY KEY AUTOINCREMENT,
     email_id     INTEGER NOT NULL REFERENCES raw_emails(id) ON DELETE CASCADE,
+    -- Phase 1B Cluster 7f: CHECK list expanded to match Category Literal in
+    -- app/agents/schemas.py. Earlier weekend session added recruitment_enquiry
+    -- and vendor_pitch to the Literal but not to this CHECK, which silently
+    -- prevented those values from ever being persisted (and would have
+    -- crashed the orchestrator the first time the classifier returned one).
+    -- Cluster 7f also adds a runtime migration in init_db() that rewrites
+    -- existing DBs whose CHECK still reflects the old 6-category list.
     category     TEXT NOT NULL CHECK (category IN (
-        'new_enquiry','existing_client','sensitive','automated','spam','other'
+        'new_enquiry','existing_client','sensitive',
+        'recruitment_enquiry','vendor_pitch',
+        'automated','spam','other'
     )),
     confidence   REAL NOT NULL,
     reasoning    TEXT,

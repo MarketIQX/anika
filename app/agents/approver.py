@@ -88,7 +88,85 @@ async def approve(
         draft_id=draft_id,
     )
     sent_log_id = await sender.send_approved_draft(draft_id, approval_id)
+
+    # Auto-save as voice_example if this draft came from an edit chain.
+    # Rationale: if Prakash sir edited a draft before approving, the final
+    # approved body represents his preferred voice. Save it to knowledge_library
+    # so future drafts can retrieve and mirror it.
+    try:
+        if row.get("parent_draft_id"):
+            _save_as_voice_example(row, decided_by=decided_by)
+    except Exception as e:  # noqa: BLE001
+        logger.error("auto voice_example save failed for draft %s: %s", draft_id, e)
+
     return {"approval_id": approval_id, "sent_log_id": sent_log_id}
+
+
+def _save_as_voice_example(draft_row: dict[str, Any], *, decided_by: str) -> int | None:
+    """Save an approved draft (that came from an edit chain) as a voice_example.
+
+    Called from approver.approve() when the draft has parent_draft_id — meaning
+    the user edited at least once before approving. The approved body is the
+    gold-standard voice for this service line.
+    """
+    from app.cognitive.library import add_entry
+    from app.db import execute as db_execute
+
+    body = draft_row.get("body") or ""
+    # Strip signature block so voice_example teaches BODY only.
+    # The Drafter's own prompt + ensure_signature() append the canonical signature at draft time.
+    # Never let signature text leak into voice_examples — would cause double-sig on retrieval.
+    _sig_markers = (
+        "\nWarm regards,", "\nBest regards,", "\nYours faithfully,",
+        "\nRegards,", "\nSincerely,",
+        "\nS V Prakasha", "\nCA Prakasha", "\nCA S V Prakasha",
+    )
+    _cut_at = len(body)
+    for _m in _sig_markers:
+        _idx = body.find(_m)
+        if _idx >= 0 and _idx < _cut_at:
+            _cut_at = _idx
+    if _cut_at < len(body):
+        body = body[:_cut_at].rstrip()
+
+    if len(body) < 50:
+        logger.info("skipping voice_example save for draft %s — body too short after sig strip", draft_row.get("id"))
+        return None
+
+    service_line = (draft_row.get("likely_service_line") or "").strip() or None
+
+    entry_id = add_entry(
+        kind="example",
+        content=body,
+        service_line=service_line,
+        scope="service_line" if service_line else "universal",
+        source_queue_id=None,
+        confidence=1.0,
+        created_by=decided_by,
+    )
+
+    db_execute(
+        """UPDATE knowledge_library SET
+              purpose = 'voice_example',
+              user_confirmed_purpose = 'voice_example',
+              anika_reasoning = ?
+           WHERE id = ?""",
+        (f"Auto-saved from approved draft #{draft_row.get('id')} (edited then approved)", entry_id),
+    )
+
+    reasoning_log.log(
+        agent_name="approver",
+        input_obj={
+            "decision": "auto_voice_example",
+            "draft_id": draft_row.get("id"),
+            "service_line": service_line,
+        },
+        output_obj={"library_id": entry_id},
+        draft_id=draft_row.get("id"),
+    )
+    logger.info("Auto-saved approved draft %s as voice_example (library id=%s)",
+                draft_row.get("id"), entry_id)
+    return entry_id
 
 
 async def edit(

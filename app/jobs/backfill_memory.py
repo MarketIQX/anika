@@ -69,15 +69,8 @@ FIRM_FACTS: list[tuple[str, str, str]] = [
     ("routing.secretarial_roc", "CA Prakasha", "routing"),
     ("routing.audit", "CA Ankush Shetty", "routing"),
     ("routing.other", "CA Prakasha", "routing"),
-    ("signature_block",
-     "Warm regards,\n\n"
-     "S V Prakasha\n"
-     "Partner\n"
-     "Balakrishna & Co., Chartered Accountants\n"
-     "#24, 3rd Floor, 10th Cross, Wilson Garden, Bangalore 560 027\n"
-     "+91 86182 59712 | prakasha@balakrishnaandco.com\n"
-     "www.balakrishnaandco.com",
-     "signature"),
+    # signature_block is NOT seeded here — it lives in app/config/firm_identity.py
+    # as a locked code constant. See knowledge_tool.get_signature_block().
     ("disclaimer_footer",
      "This communication is for general guidance only and does not constitute legal, tax, or "
      "financial advice. Specific situations require detailed consultation.",

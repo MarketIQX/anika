@@ -32,24 +32,18 @@ def list_firm_facts(category: str | None = None) -> list[dict[str, Any]]:
 
 
 def get_signature_block() -> str:
-    """Return Prakash sir's signature block (the canonical sign-off).
+    """Return Prakash sir's signature block — the locked canonical sign-off.
 
-    Falls back to a minimal default if the firm_knowledge row is missing —
-    this happens only if backfill hasn't run, and we don't want drafting to
-    crash in that state.
+    Source of truth: app/config/firm_identity.SIGNATURE_BLOCK (locked in code).
+    Previously this read from firm_knowledge.signature_block which created a
+    second source of truth that drifted from the locked version. That bug
+    caused double-signature stacking on drafts.
+
+    The legacy DB row in firm_knowledge.signature_block is now ignored.
     """
-    sig = get_firm_fact("signature_block")
-    if sig:
-        return sig
-    return (
-        "Warm regards,\n\n"
-        "S V Prakasha\n"
-        "Partner\n"
-        "Balakrishna & Co., Chartered Accountants\n"
-        "#24, 3rd Floor, 10th Cross, Wilson Garden, Bangalore 560 027\n"
-        "+91 86182 59712 | prakasha@balakrishnaandco.com\n"
-        "www.balakrishnaandco.com"
-    )
+    from app.config.firm_identity import SIGNATURE_BLOCK
+    return SIGNATURE_BLOCK
+
 
 
 def get_tone_rules() -> dict[str, list[str]]:

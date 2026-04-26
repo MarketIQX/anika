@@ -1,0 +1,106 @@
+{% extends "base.html" %}
+{% block title %}{% if rule %}Edit rule{% else %}New rule{% endif %} | Anika{% endblock %}
+{% block content %}
+
+<div class="max-w-3xl mx-auto">
+  <div class="mb-6">
+    <a href="/train/rules" class="text-sm text-slate-500 hover:text-slate-900">← Back to Rules</a>
+  </div>
+
+  <h1 class="text-2xl font-semibold text-slate-900 mb-2">
+    {% if rule %}Edit rule #{{ rule.id }}{% else %}Create new rule{% endif %}
+  </h1>
+  <p class="text-slate-600 mb-6 text-sm">
+    {% if rule %}
+      Editing this rule will change how Anika classifies future uploads that match the trigger.
+    {% else %}
+      Teach Anika a rule she will apply to all future uploads. Be specific — vague rules are worse than none.
+    {% endif %}
+  </p>
+
+  <form method="post" action="/train/rules/save" class="space-y-4">
+    {% if rule %}
+      <input type="hidden" name="rule_id" value="{{ rule.id }}" />
+    {% else %}
+      <input type="hidden" name="rule_id" value="0" />
+    {% endif %}
+
+    <div class="bg-white border border-slate-200 rounded-lg p-6 space-y-4">
+
+      <div>
+        <label class="block text-xs font-medium text-slate-700 mb-1">
+          RULE TEXT <span class="text-slate-400">— what Anika should remember</span>
+        </label>
+        <textarea name="rule_text" rows="3" required
+          class="w-full border border-slate-300 rounded px-3 py-2 text-sm"
+          placeholder="e.g. Security warnings from external parties (banks, vendors) are reference_material, not firm_policy.">{% if rule %}{{ rule.rule_text }}{% endif %}</textarea>
+        <p class="text-xs text-slate-500 mt-1">
+          Write the rule in plain English. Anika will read this and apply it.
+        </p>
+      </div>
+
+      <div>
+        <label class="block text-xs font-medium text-slate-700 mb-1">
+          WHEN IT APPLIES <span class="text-slate-400">— trigger pattern</span>
+        </label>
+        <textarea name="trigger_pattern" rows="2" required
+          class="w-full border border-slate-300 rounded px-3 py-2 text-sm"
+          placeholder="e.g. Content is a security warning, policy, or rule authored by an external party (bank, vendor, regulator).">{% if rule %}{{ rule.trigger_pattern }}{% endif %}</textarea>
+        <p class="text-xs text-slate-500 mt-1">
+          Describe in plain English what content should trigger this rule.
+        </p>
+      </div>
+
+      <div class="grid grid-cols-2 gap-4">
+        <div>
+          <label class="block text-xs font-medium text-slate-700 mb-1">TARGET PURPOSE</label>
+          <select name="target_purpose" required
+                  class="w-full border border-slate-300 rounded px-3 py-2 text-sm">
+            {% for p in ['voice_example','classifier_example','document_type','question_template','workflow_rule','firm_fact','firm_policy','reference_material'] %}
+              <option value="{{ p }}"
+                {% if rule and rule.target_purpose == p %}selected{% endif %}>
+                {{ p }}
+              </option>
+            {% endfor %}
+          </select>
+        </div>
+        <div>
+          <label class="block text-xs font-medium text-slate-700 mb-1">SERVICE LINE (optional)</label>
+          <input type="text" name="target_service_line"
+            value="{% if rule and rule.target_service_line %}{{ rule.target_service_line }}{% endif %}"
+            class="w-full border border-slate-300 rounded px-3 py-2 text-sm"
+            placeholder="nri_tax, audit, gst_indirect…" />
+        </div>
+      </div>
+
+      <div>
+        <label class="block text-xs font-medium text-slate-700 mb-1">
+          PRIORITY <span class="text-slate-400">— higher = applies first when multiple rules match</span>
+        </label>
+        <input type="number" name="priority" min="0" max="100"
+          value="{% if rule %}{{ rule.priority }}{% else %}5{% endif %}"
+          class="w-32 border border-slate-300 rounded px-3 py-2 text-sm" />
+        <p class="text-xs text-slate-500 mt-1">
+          Default 5. Use 0-3 for weak hints, 5-7 for normal, 8-10 for strict overrides.
+        </p>
+      </div>
+
+      {% if rule %}
+        <div class="text-xs text-slate-500 pt-3 border-t border-slate-100">
+          Created by {{ rule.created_by }} · Used {{ rule.applied_count }}× · Created {{ rule.created_at[:16] }}
+        </div>
+      {% endif %}
+
+    </div>
+
+    <div class="flex items-center gap-3">
+      <button type="submit"
+        class="bg-slate-900 hover:bg-slate-800 text-white px-4 py-2 rounded text-sm font-medium">
+        {% if rule %}Save changes{% else %}Create rule{% endif %}
+      </button>
+      <a href="/train/rules" class="text-sm text-slate-500 hover:text-slate-900">Cancel</a>
+    </div>
+  </form>
+</div>
+
+{% endblock %}

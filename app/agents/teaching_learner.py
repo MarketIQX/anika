@@ -97,7 +97,24 @@ For each unit:
                    specific. Must match service_line presence.
   - confidence   : your own 0-1 confidence in the above classification.
 
-CLARIFICATION POLICY — be conservative, prefer asking.
+CLARIFICATION POLICY — be RUTHLESSLY skeptical. Over-clarifying is SAFER than wrong storage.
+
+HARD AMBIGUITY TRIGGERS — confidence MUST be < 0.8, MUST generate clarification:
+  - Any fee, amount, number, or rupee value WITHOUT an explicit service line named in the same unit
+  - Content shorter than 15 words total
+  - Words like "fee", "cost", "price", "charge", "rate" without a specific service context
+  - A figure like "15000" or "Rs. X" where the service is not stated in the same line
+  - A past email snippet where the service being discussed is not obvious from the text itself
+  - Any entry that could plausibly apply to multiple service lines
+
+CONFIDENCE SCORING RULES (be ruthlessly honest, do NOT default to 0.9):
+  - Full sentence naming service line AND clear intent → 0.9+
+  - Clear intent but service line missing → 0.3-0.6 (ALWAYS clarify)
+  - Fragment, amount only, or ambiguous verb → 0.1-0.3 (ALWAYS clarify)
+  - Very short input (under 15 words) → max 0.4 regardless
+
+UNIVERSAL SCOPE RULE — apply ONLY when the unit provably applies to ALL service lines. If you would label something universal but cannot prove it applies to NRI tax AND foreign subsidiary AND GST AND audit AND everything else, flag it as a clarification instead. When in doubt about scope, ASK.
+
 For every unit with confidence < 0.8, generate ONE clarification question.
 Ambiguity triggers to watch for:
   - service line unclear (could apply to 2+ lines)

@@ -45,14 +45,44 @@ def notify_draft_ready(
     tag = urgency.upper() if urgency else "NEW"
     sl = f" [{service_line}]" if service_line else ""
 
-    subject = f"Anika: draft ready for approval ({tag}{sl})"
+    # Cognitive state from the draft row
+    from app.db import fetch_one as _fetch_one
+    cog_row = _fetch_one(
+        "SELECT cognitive_state, voice_coverage_count FROM drafts WHERE id = ?",
+        (draft_id,),
+    )
+    cognitive_state = cog_row["cognitive_state"] if cog_row else None
+    voice_count = cog_row["voice_coverage_count"] if cog_row else 0
+
+    cold_marker = " - TEACH ME" if cognitive_state == "cold_start" else ""
+    subject = f"Anika: draft ready for approval ({tag}{sl}){cold_marker}"
+
+    if cognitive_state == "cold_start":
+        sl_name = service_line or "this service line"
+        honesty_preamble = (
+            f"COLD START - first draft for {sl_name}\n\n"
+            f"I have no learned voice examples for this area yet. This draft is my "
+            f"best-guess, conservative interpretation - not your actual voice.\n\n"
+            f"What to do: edit the draft to your actual style before approving. "
+            f"Your edit becomes my first voice example for {sl_name}, "
+            f"and future drafts in this area will learn from it.\n\n"
+        )
+    elif cognitive_state == "learning":
+        sl_name = service_line or "this service line"
+        honesty_preamble = (
+            f"LEARNING - I have {voice_count} voice example(s) for {sl_name}.\n"
+            f"Still early in learning. Please review carefully - each edit sharpens my voice.\n\n"
+        )
+    else:
+        honesty_preamble = ""
+
     body = (
+        f"{honesty_preamble}"
         f"New enquiry summary:\n"
         f"{sender_summary.strip()}\n\n"
         f"Review & approve: {url}\n\n"
-        f"— Anika"
+        f"- Anika"
     )
-
     try:
         gmail_tool.send_email(get_settings().notify_email, subject, body)
         logger.info("Notification sent for draft %s", draft_id)
@@ -62,7 +92,12 @@ def notify_draft_ready(
         return False
 
 
-def notify_sensitive_bypass(email_id: int, from_email: str, subject: str, reason: str) -> bool:
+def notify_sensitive_bypass(
+    email_id: int,
+    from_email: str,
+    subject: str,
+    reason: str,
+) -> bool:
     """Alert Prakash sir when Anika has bypassed an enquiry as 'sensitive'.
 
     No draft is created; this is a priority flag for manual handling.

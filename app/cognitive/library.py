@@ -152,6 +152,7 @@ def retrieve_rules(service_line: str | None) -> list[dict[str, Any]]:
               FROM knowledge_library
              WHERE is_active = 1
                AND kind IN ('rule','policy')
+               AND purpose IN ('voice_example','firm_policy','firm_fact','question_template','workflow_rule')
                AND (scope = 'universal' OR service_line = ?)
              ORDER BY scope ASC, id ASC
             """,
@@ -162,7 +163,7 @@ def retrieve_rules(service_line: str | None) -> list[dict[str, Any]]:
             """
             SELECT id, kind, content, service_line, scope
               FROM knowledge_library
-             WHERE is_active = 1 AND kind IN ('rule','policy') AND scope='universal'
+             WHERE is_active = 1 AND kind IN ('rule','policy') AND purpose IN ('voice_example','firm_policy','firm_fact','question_template','workflow_rule') AND scope='universal'
              ORDER BY id ASC
             """
         )
@@ -176,6 +177,7 @@ def retrieve_facts(service_line: str | None) -> list[dict[str, Any]]:
             SELECT id, content, service_line, scope
               FROM knowledge_library
              WHERE is_active = 1 AND kind = 'fact'
+               AND purpose IN ('voice_example','firm_policy','firm_fact','question_template','workflow_rule')
                AND (scope = 'universal' OR service_line = ?)
              ORDER BY scope, id
             """,
@@ -185,7 +187,7 @@ def retrieve_facts(service_line: str | None) -> list[dict[str, Any]]:
         """
         SELECT id, content, service_line, scope
           FROM knowledge_library
-         WHERE is_active = 1 AND kind = 'fact' AND scope = 'universal'
+         WHERE is_active = 1 AND kind = 'fact' AND purpose IN ('voice_example','firm_policy','firm_fact','question_template','workflow_rule') AND scope = 'universal'
          ORDER BY id
         """
     )
@@ -220,7 +222,7 @@ def retrieve_examples(
           FROM knowledge_library_vec v
           JOIN knowledge_library k ON k.id = v.library_id
          WHERE v.embedding MATCH ? AND k = ?
-           AND k.is_active = 1 AND k.kind = 'example'
+           AND k.is_active = 1 AND k.kind = 'example' AND k.purpose IN ('voice_example','firm_policy','firm_fact','question_template','workflow_rule')
          ORDER BY v.distance
         """,
         (packed, raw_k),
@@ -288,3 +290,56 @@ def list_entries(
 
 def get_entry(library_id: int) -> dict[str, Any] | None:
     return fetch_one("SELECT * FROM knowledge_library WHERE id=?", (library_id,))
+
+
+# --------------------------------------------------------------------------
+# Cognitive state helpers (Phase 1B+)
+# --------------------------------------------------------------------------
+
+def voice_coverage(service_line: str | None) -> dict[str, Any]:
+    """How much learned voice does Anika have for this service_line?
+
+    Returns dict with:
+      - count: number of voice_example entries
+      - cognitive_state: 'cold_start' (0), 'learning' (1-2), 'learned' (3+)
+      - service_line: the queried service_line
+      - has_universal: whether universal-scope voice_examples exist as fallback
+    """
+    if service_line:
+        sl_rows = fetch_all("""
+            SELECT COUNT(*) n FROM knowledge_library
+             WHERE is_active = 1
+               AND purpose = 'voice_example'
+               AND service_line = ?
+        """, (service_line,))
+    else:
+        sl_rows = fetch_all("""
+            SELECT COUNT(*) n FROM knowledge_library
+             WHERE is_active = 1
+               AND purpose = 'voice_example'
+               AND (service_line IS NULL OR scope = 'universal')
+        """)
+
+    sl_count = sl_rows[0]["n"] if sl_rows else 0
+
+    universal_rows = fetch_all("""
+        SELECT COUNT(*) n FROM knowledge_library
+         WHERE is_active = 1
+           AND purpose = 'voice_example'
+           AND scope = 'universal'
+    """)
+    universal_count = universal_rows[0]["n"] if universal_rows else 0
+
+    if sl_count == 0:
+        state = "cold_start"
+    elif sl_count < 3:
+        state = "learning"
+    else:
+        state = "learned"
+
+    return {
+        "count": sl_count,
+        "cognitive_state": state,
+        "service_line": service_line,
+        "has_universal": universal_count > 0,
+    }

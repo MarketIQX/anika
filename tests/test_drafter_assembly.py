@@ -54,7 +54,7 @@ def test_ensure_signature_appends_if_missing():
 
 
 def test_assemble_prompt_always_ends_with_signature_instruction(embed_mock):
-    prompt, ids = drafter.assemble_prompt(
+    prompt, ids, _coverage = drafter.assemble_prompt(
         service_line="nri_tax",
         enquiry_body="Question about ITR-2 filing for NRI.",
     )
@@ -78,7 +78,7 @@ def test_assemble_prompt_pulls_universal_and_service_rules(embed_mock):
                  content="TP: always request prior TP study if any.",
                  service_line="transfer_pricing", scope="service_line", confidence=1.0)
 
-    prompt, ids = drafter.assemble_prompt(
+    prompt, ids, _coverage = drafter.assemble_prompt(
         service_line="nri_tax",
         enquiry_body="NRI ITR enquiry",
     )
@@ -96,7 +96,7 @@ def test_assemble_prompt_retrieves_examples_via_embedding(embed_mock):
         content="Dear Sir,\n\nThank you for your note about NRI ITR-2. Could you share Form 26AS?\n\nYours faithfully,\nCA Prakasha",
         service_line="nri_tax", scope="service_line", confidence=1.0,
     )
-    prompt, ids = drafter.assemble_prompt(
+    prompt, ids, _coverage = drafter.assemble_prompt(
         service_line="nri_tax",
         enquiry_body="NRI looking for ITR-2 help",
     )

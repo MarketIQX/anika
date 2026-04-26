@@ -30,7 +30,14 @@ def client():
 
 @pytest.fixture
 def no_openai(monkeypatch):
-    """Stub OpenAI usage (embeddings + learner) so tests are deterministic."""
+    """Stub OpenAI usage (embeddings + every agent the train routes call)
+    so tests are deterministic.
+
+    The Phase 1B teach flow calls purpose_classifier (always) and
+    humility_layer (only if confidence < 0.5). We stub the classifier to
+    return a high-confidence proposal so humility_layer never runs by
+    default. Tests that need the humility path can override.
+    """
     from app.tools import memory_tool as _mt
 
     monkeypatch.setattr(_mt, "embed", lambda text: [0.0] * 1536)
@@ -43,6 +50,33 @@ def no_openai(monkeypatch):
         )
 
     monkeypatch.setattr(teaching_learner, "extract", fake_extract)
+
+    # Phase 1B: /train/teach now calls purpose_classifier.classify_purpose
+    # (and humility_layer.articulate_uncertainty if confidence < 0.5).
+    # Stub both so tests don't hit OpenAI.
+    from app.agents import purpose_classifier as _pc
+    from app.agents import humility_layer as _hl
+
+    async def fake_classify_purpose(content, filename=None, file_mime=None):
+        return _pc.PurposeProposal(
+            proposed_purpose="firm_policy",
+            confidence=0.9,
+            reasoning="fake (test stub)",
+            suggested_service_line=None,
+            suggested_custom_label=None,
+        )
+
+    async def fake_articulate(content, classifier_reasoning=None, filename=None):
+        return _hl.UnknownArticulation(
+            noticed_features=["fake feature 1", "fake feature 2"],
+            best_guess_purpose="firm_policy",
+            uncertainty_source="test stub",
+            single_focused_question="test stub question?",
+            suggested_custom_label=None,
+        )
+
+    monkeypatch.setattr(_pc, "classify_purpose", fake_classify_purpose)
+    monkeypatch.setattr(_hl, "articulate_uncertainty", fake_articulate)
 
 
 def _login(client: TestClient, email: str, password: str) -> None:
@@ -69,7 +103,11 @@ def test_train_unauth_redirects(client):
 # --- Teach flow -----------------------------------------------------------
 
 
-def test_post_teach_text_creates_queue_and_library(seeded_users, client, no_openai):
+def test_post_teach_text_creates_queue_with_proposal(seeded_users, client, no_openai):
+    """Phase 1B invariant: POSTing teaching content creates a queue row with
+    Anika's auto-classified proposal stored, in awaiting_confirmation state.
+    The library row only lands AFTER the user confirms via
+    /train/teach/confirm — that's a separate test."""
     _login(client, PK_EMAIL, PK_PW)
     r = client.post(
         "/train/teach",
@@ -77,8 +115,19 @@ def test_post_teach_text_creates_queue_and_library(seeded_users, client, no_open
         follow_redirects=False,
     )
     assert r.status_code == 303
+    # Queue row created.
     assert fetch_one("SELECT COUNT(*) n FROM teaching_queue")["n"] == 1
-    assert fetch_one("SELECT COUNT(*) n FROM knowledge_library WHERE is_active=1")["n"] == 1
+    # Phase 1B flow: row sits in awaiting_confirmation with the classifier's
+    # proposal already filled in. Library row does NOT land here.
+    row = fetch_one(
+        "SELECT awaiting_confirmation, anika_proposed_purpose, anika_proposed_confidence "
+        "FROM teaching_queue ORDER BY id DESC LIMIT 1"
+    )
+    assert row["awaiting_confirmation"] == 1
+    assert row["anika_proposed_purpose"] == "firm_policy"  # from no_openai stub
+    assert row["anika_proposed_confidence"] == 0.9
+    # No library row yet — confirmation gate is the contract.
+    assert fetch_one("SELECT COUNT(*) n FROM knowledge_library WHERE is_active=1")["n"] == 0
 
 
 def test_post_teach_file_creates_queue_row(seeded_users, client, no_openai, tmp_path):
@@ -302,8 +351,15 @@ def test_drafting_paused_short_circuits_orchestrator(seeded_users, no_openai, mo
     try:
         msg = InboxMessage(
             message_id="pm-1", thread_id="t1", from_email="x@y.com", from_name="X",
-            to_email="prakasha@balakrishnaandco.com", cc="", subject="Test",
-            body_plain="Need ITR help.", body_html="", snippet="",
+            to_email="prakasha@balakrishnaandco.com", cc="", subject="ITR help",
+            # Body must clear structural_validator's 40-char minimum so the
+            # message reaches the drafting_paused gate (which is what this
+            # test exercises). Without this it dies at structural_validator.
+            body_plain=(
+                "Hello, I need help filing my income tax return for FY24. "
+                "Can we set up a brief call to discuss the process?"
+            ),
+            body_html="", snippet="",
             received_at="2026-04-23T10:00:00Z", is_reply_in_thread=False,
         )
         result = asyncio.get_event_loop().run_until_complete(orchestrator.handle(msg))

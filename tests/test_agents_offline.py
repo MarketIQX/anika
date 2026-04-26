@@ -206,7 +206,12 @@ async def test_vip_sender_bypasses_drafter(seeded, monkeypatch):
         to_email="prakasha@balakrishnaandco.com",
         cc="",
         subject="NRI question",
-        body_plain="Hello",
+        # Body must clear structural_validator's 40-char minimum so the
+        # message reaches the VIP gate (which is what this test exercises).
+        body_plain=(
+            "Hello sir, I am an NRI based in Dubai and I would like to "
+            "discuss my Indian tax filing for the last financial year."
+        ),
         body_html="",
         snippet="",
         received_at="2026-04-22T10:00:00Z",

@@ -354,6 +354,11 @@ def init_db(db_path: Path | str | None = None) -> sqlite3.Connection:
     _ensure_column(conn, "raw_emails", "outbound_reply_gmail_id", "TEXT DEFAULT NULL")
     _ensure_column(conn, "raw_emails", "outbound_reply_harvested_at", "TEXT DEFAULT NULL")
     _ensure_column(conn, "knowledge_library", "harvest_source", "TEXT DEFAULT NULL")
+    # Phase 1C-3 fix — exponential-backoff scan timestamp on raw_emails.
+    # Set on every scan attempt so the harvester doesn't rescan no-outbound
+    # threads on every 30s poll cycle. See app/jobs/outbound_harvester.py
+    # for the backoff curve.
+    _ensure_column(conn, "raw_emails", "outbound_last_scanned_at", "TEXT DEFAULT NULL")
 
     # Create vec0 virtual tables — depend on sqlite-vec being loaded.
     # memory_vec backs the original `memory` table.

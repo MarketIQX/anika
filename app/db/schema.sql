@@ -46,7 +46,13 @@ CREATE TABLE IF NOT EXISTS raw_emails (
     -- outbound_reply_gmail_id is the idempotency key: once set, the harvester
     -- never re-scans this thread. NULL = "not yet found / not yet checked".
     outbound_reply_gmail_id     TEXT DEFAULT NULL,
-    outbound_reply_harvested_at TEXT DEFAULT NULL
+    outbound_reply_harvested_at TEXT DEFAULT NULL,
+    -- Phase 1C-3 fix — exponential-backoff scan timestamp.
+    -- Set on EVERY scan attempt (success, no-outbound, or error) so threads
+    -- without partner replies aren't rescanned every poll cycle. The harvester
+    -- consults this column with an age-based backoff (recent emails rescan
+    -- often, older ones rescan rarely). NULL = never scanned yet.
+    outbound_last_scanned_at    TEXT DEFAULT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_raw_emails_received ON raw_emails(received_at);
 CREATE INDEX IF NOT EXISTS idx_raw_emails_from ON raw_emails(from_email);

@@ -30,13 +30,23 @@ CREATE TABLE IF NOT EXISTS raw_emails (
     snippet            TEXT,
     received_at        TEXT NOT NULL,
     is_reply_in_thread INTEGER NOT NULL DEFAULT 0,
+    created_at         TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+    -- Phase 1A — promoted from runtime ALTER TABLE. Declared AFTER created_at
+    -- to match live DB column order (the ALTER appended this column at the
+    -- end of the original 13-column table). PRAGMA parity, same discipline
+    -- as Phase 1B Cluster 2.
     is_web_form        INTEGER NOT NULL DEFAULT 0,  -- 1 = the mail was a website-form
                                                     --     notification and the sender/body
                                                     --     columns were substituted by the
                                                     --     parser. Sender uses this to
                                                     --     avoid threading the outbound
                                                     --     reply into Prakash sir's own inbox.
-    created_at         TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+    -- Phase 1C-3 outbound-harvester columns (promoted from runtime ALTER).
+    -- Position at end matches live DB column order (PRAGMA table_info parity).
+    -- outbound_reply_gmail_id is the idempotency key: once set, the harvester
+    -- never re-scans this thread. NULL = "not yet found / not yet checked".
+    outbound_reply_gmail_id     TEXT DEFAULT NULL,
+    outbound_reply_harvested_at TEXT DEFAULT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_raw_emails_received ON raw_emails(received_at);
 CREATE INDEX IF NOT EXISTS idx_raw_emails_from ON raw_emails(from_email);
@@ -109,9 +119,17 @@ CREATE TABLE IF NOT EXISTS drafts (
     body            TEXT NOT NULL,
     tone_notes      TEXT,
     uses_signature  INTEGER NOT NULL DEFAULT 1,
+    -- Phase 1C-3 added 'rejected_partner_replied_outside': the partner went
+    -- around Anika and replied directly via Gmail before Anika's draft was
+    -- approved. Set by app/jobs/outbound_harvester.py after harvesting the
+    -- partner's free-typed body as a voice_example. Semantically distinct
+    -- from 'rejected' (active dismissal): this means Anika's draft was
+    -- bypassed, not judged. Existing DBs are migrated by
+    -- _migrate_drafts_sent_status_check_constraint() in connection.py.
     sent_status     TEXT NOT NULL DEFAULT 'pending_approval'
                     CHECK (sent_status IN (
-                        'pending_approval','approved','sending','sent','rejected','edited','expired'
+                        'pending_approval','approved','sending','sent','rejected',
+                        'rejected_partner_replied_outside','edited','expired'
                     )),
     model           TEXT NOT NULL,
     prompt_version  INTEGER,
@@ -392,7 +410,14 @@ CREATE TABLE IF NOT EXISTS knowledge_library (
     user_confirmed_purpose    TEXT DEFAULT NULL,
     -- For purposes the user typed manually rather than choosing from the list.
     custom_purpose_label      TEXT DEFAULT NULL,
-    is_custom_purpose         INTEGER DEFAULT 0
+    is_custom_purpose         INTEGER DEFAULT 0,
+    -- Phase 1C-3 — pathway attribution (orthogonal to created_by, which is the actor).
+    --   'edit_approval'  = saved by approver after partner edited+approved a draft
+    --   'gmail_outbound' = saved by outbound_harvester from a partner Gmail-direct send
+    --   'manual_upload'  = uploaded via /train (or imported from a file)
+    -- NULL on rows that pre-date this column (defaults to 'edit_approval' interpretation
+    -- in UI rendering, which was the only path before this commit).
+    harvest_source            TEXT DEFAULT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_kl_active ON knowledge_library(is_active);
 CREATE INDEX IF NOT EXISTS idx_kl_kind ON knowledge_library(kind);

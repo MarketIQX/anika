@@ -167,6 +167,137 @@ def _migrate_classifications_check_constraint(conn: sqlite3.Connection) -> None:
         conn.execute("PRAGMA foreign_keys = ON")
 
 
+def _migrate_drafts_sent_status_check_constraint(conn: sqlite3.Connection) -> None:
+    """Phase 1C-3 migration.
+
+    drafts.sent_status was originally constrained to a 7-value list:
+        pending_approval | approved | sending | sent | rejected | edited | expired
+    Phase 1C-3 adds 'rejected_partner_replied_outside' — set by the outbound
+    harvester when Prakash sir replies to an enquiry directly via Gmail
+    before approving Anika's draft. The new value is semantically distinct
+    from 'rejected' (active dismissal) and lets us measure adaptation lag
+    separately from outright rejection.
+
+    This migration rewrites the table with the expanded CHECK if the live
+    schema still has the old one. Idempotent: skipped after the first run.
+
+    Same safety pattern as Cluster 7f (_migrate_classifications_check_constraint):
+      - PRAGMA foreign_keys = OFF must happen OUTSIDE a transaction.
+      - The rebuild itself runs inside an explicit BEGIN/COMMIT — atomic on
+        any failure path (CREATE / INSERT / DROP / RENAME / index recreation /
+        trigger recreation).
+      - Pre-INSERT and post-RENAME row-count assertions: the migration
+        REFUSES to commit if any row was lost in flight.
+      - Indexes (idx_drafts_email, idx_drafts_status) are recreated inside
+        the transaction. Triggers (enforce_approval_before_send,
+        drafts_touch_updated_at) are dropped automatically when the table is
+        dropped, and re-created inside the migration so the approval-gate
+        invariant is never absent for any window.
+    """
+    row = conn.execute(
+        "SELECT sql FROM sqlite_master WHERE type='table' AND name='drafts'"
+    ).fetchone()
+    if not row:
+        return  # fresh DB, drafts doesn't exist yet
+    current_sql = row["sql"] if isinstance(row, dict) else row[0]
+    if "rejected_partner_replied_outside" in (current_sql or ""):
+        return  # already migrated — idempotent
+
+    pre_row = conn.execute("SELECT COUNT(*) AS n FROM drafts").fetchone()
+    pre_count = pre_row["n"] if isinstance(pre_row, dict) else pre_row[0]
+
+    conn.execute("PRAGMA foreign_keys = OFF")
+    try:
+        conn.execute("BEGIN")
+        try:
+            # Column order must mirror live DB exactly (Phase 1B PRAGMA parity).
+            conn.execute("""
+                CREATE TABLE drafts_new (
+                    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+                    email_id        INTEGER NOT NULL REFERENCES raw_emails(id) ON DELETE CASCADE,
+                    parent_draft_id INTEGER REFERENCES drafts(id),
+                    subject         TEXT NOT NULL,
+                    body            TEXT NOT NULL,
+                    tone_notes      TEXT,
+                    uses_signature  INTEGER NOT NULL DEFAULT 1,
+                    sent_status     TEXT NOT NULL DEFAULT 'pending_approval'
+                                    CHECK (sent_status IN (
+                                        'pending_approval','approved','sending','sent','rejected',
+                                        'rejected_partner_replied_outside','edited','expired'
+                                    )),
+                    model           TEXT NOT NULL,
+                    prompt_version  INTEGER,
+                    reasoning       TEXT,
+                    created_at      TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+                    updated_at      TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+                    cognitive_state      TEXT DEFAULT NULL,
+                    voice_coverage_count INTEGER DEFAULT 0
+                )
+            """)
+            conn.execute("""
+                INSERT INTO drafts_new
+                    SELECT id, email_id, parent_draft_id, subject, body, tone_notes,
+                           uses_signature, sent_status, model, prompt_version, reasoning,
+                           created_at, updated_at, cognitive_state, voice_coverage_count
+                      FROM drafts
+            """)
+            mid_row = conn.execute("SELECT COUNT(*) AS n FROM drafts_new").fetchone()
+            mid_count = mid_row["n"] if isinstance(mid_row, dict) else mid_row[0]
+            if mid_count != pre_count:
+                raise RuntimeError(
+                    f"drafts migration aborted: INSERT lost rows "
+                    f"(pre={pre_count}, new={mid_count})"
+                )
+            conn.execute("DROP TABLE drafts")
+            conn.execute("ALTER TABLE drafts_new RENAME TO drafts")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_drafts_email ON drafts(email_id)")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_drafts_status ON drafts(sent_status)")
+
+            # Re-create the two triggers attached to drafts. SQLite drops
+            # triggers when their table is dropped; without these recreations
+            # the approval gate would be absent and updated_at would stop
+            # auto-touching.
+            conn.execute("DROP TRIGGER IF EXISTS enforce_approval_before_send")
+            conn.execute("""
+                CREATE TRIGGER enforce_approval_before_send
+                BEFORE UPDATE ON drafts
+                FOR EACH ROW
+                WHEN NEW.sent_status = 'sent' AND OLD.sent_status != 'sent'
+                BEGIN
+                    SELECT RAISE(ABORT, 'Cannot mark as sent without approval row')
+                    WHERE NOT EXISTS (
+                        SELECT 1 FROM approvals
+                        WHERE draft_id = NEW.id
+                          AND decision = 'approved'
+                    );
+                END
+            """)
+            conn.execute("DROP TRIGGER IF EXISTS drafts_touch_updated_at")
+            conn.execute("""
+                CREATE TRIGGER drafts_touch_updated_at
+                AFTER UPDATE ON drafts
+                FOR EACH ROW
+                WHEN NEW.updated_at = OLD.updated_at
+                BEGIN
+                    UPDATE drafts SET updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id = NEW.id;
+                END
+            """)
+
+            post_row = conn.execute("SELECT COUNT(*) AS n FROM drafts").fetchone()
+            post_count = post_row["n"] if isinstance(post_row, dict) else post_row[0]
+            if post_count != pre_count:
+                raise RuntimeError(
+                    f"drafts migration aborted: post-rename count "
+                    f"diverged (pre={pre_count}, post={post_count})"
+                )
+            conn.execute("COMMIT")
+        except Exception:
+            conn.execute("ROLLBACK")
+            raise
+    finally:
+        conn.execute("PRAGMA foreign_keys = ON")
+
+
 def init_db(db_path: Path | str | None = None) -> sqlite3.Connection:
     """Create the schema (idempotent) and return a ready-to-use connection.
 
@@ -190,6 +321,9 @@ def init_db(db_path: Path | str | None = None) -> sqlite3.Connection:
     # to include recruitment_enquiry + vendor_pitch (must run BEFORE any
     # downstream code attempts to insert those values).
     _migrate_classifications_check_constraint(conn)
+    # Phase 1C-3 migration — expand drafts.sent_status CHECK to include
+    # 'rejected_partner_replied_outside' (set by the outbound harvester).
+    _migrate_drafts_sent_status_check_constraint(conn)
 
     # Phase 1B Cluster 2 — promoted from runtime ALTERs in scratch scripts.
     # NOTE: types here intentionally OMIT `NOT NULL` — they must match the live
@@ -215,6 +349,11 @@ def init_db(db_path: Path | str | None = None) -> sqlite3.Connection:
     _ensure_column(conn, "teaching_queue", "anika_suggested_custom", "TEXT DEFAULT NULL")
     _ensure_column(conn, "teaching_queue", "humility_articulation", "TEXT DEFAULT NULL")
     _ensure_column(conn, "teaching_queue", "awaiting_confirmation", "INTEGER DEFAULT 1")
+
+    # Phase 1C-3 — outbound harvester columns.
+    _ensure_column(conn, "raw_emails", "outbound_reply_gmail_id", "TEXT DEFAULT NULL")
+    _ensure_column(conn, "raw_emails", "outbound_reply_harvested_at", "TEXT DEFAULT NULL")
+    _ensure_column(conn, "knowledge_library", "harvest_source", "TEXT DEFAULT NULL")
 
     # Create vec0 virtual tables — depend on sqlite-vec being loaded.
     # memory_vec backs the original `memory` table.

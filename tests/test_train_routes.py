@@ -210,6 +210,39 @@ def test_soft_delete_leaves_row_with_is_active_false(seeded_users, client, no_op
     assert row["deleted_by"] == PK_EMAIL
 
 
+# --- 1C-3: harvest_source attribution badge ------------------------------
+
+
+def test_train_renders_harvest_source_badges(seeded_users, client):
+    """Phase 1C-3: /train shows a small attribution badge per voice_example
+    indicating which pathway created it. Smoke-tests the three branches
+    (edit_approval / gmail_outbound / manual_upload) by inserting one row
+    of each and checking the rendered HTML contains the badge text.
+
+    Direct SQL insert (not library.add_entry) so we don't need an embed
+    mock — the list view reads from knowledge_library only, no vec join.
+    """
+    from app.db import execute as db_execute
+    _login(client, PK_EMAIL, PK_PW)
+
+    for source in ("edit_approval", "gmail_outbound", "manual_upload"):
+        db_execute(
+            """
+            INSERT INTO knowledge_library
+              (kind, content, scope, confidence, purpose, harvest_source, created_by)
+            VALUES('example', ?, 'universal', 1.0, 'voice_example', ?, 'test')
+            """,
+            (f"Sample voice_example for {source}.", source),
+        )
+
+    r = client.get("/train")
+    assert r.status_code == 200
+    body = r.text
+    assert "edited" in body
+    assert "harvested from Gmail" in body
+    assert "manually uploaded" in body
+
+
 # --- Export --------------------------------------------------------------
 
 

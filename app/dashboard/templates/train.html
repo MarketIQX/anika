@@ -446,6 +446,18 @@
                 {% if e.applied_count and e.applied_count > 0 %}
                   <span class="px-2 py-0.5 rounded bg-slate-800 text-white">Used {{ e.applied_count }}×</span>
                 {% endif %}
+                {# Phase 1C-3 — pathway attribution. NULL on rows that pre-date the
+                   harvest_source column; we leave the badge off rather than guess. #}
+                {% if e.harvest_source == 'edit_approval' %}
+                  <span class="px-2 py-0.5 rounded bg-slate-100 text-slate-700"
+                        title="Saved by Anika after you edited and approved a draft.">edited</span>
+                {% elif e.harvest_source == 'gmail_outbound' %}
+                  <span class="px-2 py-0.5 rounded bg-sky-100 text-sky-800"
+                        title="Harvested by Anika from a reply you sent directly via Gmail.">harvested from Gmail</span>
+                {% elif e.harvest_source == 'manual_upload' %}
+                  <span class="px-2 py-0.5 rounded bg-amber-100 text-amber-800"
+                        title="Uploaded via the Train tab.">manually uploaded</span>
+                {% endif %}
                 <span class="text-slate-400">id={{ e.id }}</span>
               </div>
               <details>

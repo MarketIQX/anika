@@ -49,6 +49,7 @@ def build_summary() -> dict[str, int | list[dict]]:
         """
         SELECT COUNT(*) n FROM sent_log
          WHERE sent_at >= datetime('now','-7 days')
+           AND test_mode = 0
         """
     )["n"]
     errors = fetch_all(

@@ -18,22 +18,24 @@ Why one module, not three call sites:
   - reasoning_log attribution differs by pathway but is small and
     deterministic — branched on `source`.
 
-This commit (2a) is pure refactor: the only currently-exercised pathway
-is 'edit_approval', and its DB output is byte-identical to what
-approver._save_as_voice_example produced before the extraction (modulo
-the new harvest_source column, which is the whole reason 1C-3 exists).
-
-Embedding-similarity dedup is added in commit 2b; this commit deliberately
-does not include it.
+Embedding-similarity dedup (commit 2b): before saving, the harvester
+embeds the candidate body and queries knowledge_library_vec for the
+nearest active voice_example in the same scope. If the L2 distance is
+below DEDUP_DISTANCE_THRESHOLD, the existing entry's library_id is
+returned and no new row is created. Prevents bloat when the harvester
+finds essentially-the-same partner reply across multiple polls, or when
+the partner approves a near-identical draft body twice.
 """
 from __future__ import annotations
 
 import logging
+import struct
 from typing import Literal
 
 from app.cognitive import library, reasoning_log
 from app.config.firm_identity import strip_signature_block
-from app.db import execute as db_execute
+from app.db import EMBEDDING_DIM, execute as db_execute, fetch_all, fetch_one
+from app.tools import memory_tool
 
 logger = logging.getLogger(__name__)
 
@@ -44,6 +46,103 @@ HarvestSource = Literal["edit_approval", "gmail_outbound", "manual_upload"]
 # Body must be at least this long AFTER signature stripping. Below this,
 # the example is too thin to be useful retrieval signal.
 MIN_BODY_CHARS = 50
+
+
+# L2 distance threshold below which two voice_examples are treated as
+# duplicates. OpenAI text-embedding-3-small returns unit-normalized
+# vectors, so for unit vectors L2 = sqrt(2 - 2·cos(θ)). Reference points:
+#     cosine 1.00  →  L2 = 0.000  (identical text)
+#     cosine 0.99  →  L2 ≈ 0.141
+#     cosine 0.97  →  L2 ≈ 0.245
+#     cosine 0.95  →  L2 ≈ 0.316
+#     cosine 0.90  →  L2 ≈ 0.447
+# 0.30 corresponds to ~cos 0.955 — "essentially the same content, perhaps
+# with whitespace or single-word differences". Tuned conservative on
+# purpose: only very-near duplicates are flagged, and the threshold is
+# easy to relax once production data shows real duplicate-rate.
+DEDUP_DISTANCE_THRESHOLD = 0.30
+
+
+def _pack_vector(vec: list[float]) -> bytes:
+    """Pack a vector for sqlite-vec MATCH lookups (little-endian float32)."""
+    if len(vec) != EMBEDDING_DIM:
+        raise ValueError(f"expected {EMBEDDING_DIM}-dim vector, got {len(vec)}")
+    return struct.pack(f"{EMBEDDING_DIM}f", *vec)
+
+
+def _find_duplicate_voice_example(
+    content: str,
+    service_line: str | None,
+) -> int | None:
+    """Return the library_id of an active near-duplicate voice_example, or None.
+
+    Service-line scope rules:
+      - service_line is None → match against universal-scope examples only.
+      - service_line is set  → match against same-service-line OR universal.
+    Same content under DIFFERENT service lines is NOT a duplicate; voice
+    can be reused across lines but partner edits in different lines are
+    independent signal.
+
+    Soft-deleted (is_active=0) entries never match — we don't want a
+    previously-removed example to silently block a fresh save.
+
+    Cheap path: if no active voice_examples exist at all, skip the embed
+    call entirely.
+
+    Best-effort: any embed/query failure logs a warning and returns None
+    (i.e. proceed with save). Dedup is a quality-of-life optimization, not
+    a correctness invariant.
+    """
+    has_any = fetch_one(
+        "SELECT 1 AS x FROM knowledge_library "
+        "WHERE is_active = 1 AND purpose = 'voice_example' LIMIT 1"
+    )
+    if not has_any:
+        return None
+
+    try:
+        qvec = memory_tool.embed(content)
+    except Exception as e:  # noqa: BLE001
+        logger.warning("dedup embed failed, skipping dedup check: %s", e)
+        return None
+    if not qvec:
+        return None
+
+    try:
+        packed = _pack_vector(qvec)
+    except ValueError as e:
+        logger.warning("dedup pack failed, skipping dedup check: %s", e)
+        return None
+
+    # K=10 over-fetch then filter by scope. If the closest 10 don't include
+    # a same-scope hit below threshold, a more distant one is not a duplicate.
+    rows = fetch_all(
+        """
+        SELECT v.library_id AS id, v.distance AS distance,
+               k.service_line AS service_line, k.scope AS scope
+          FROM knowledge_library_vec v
+          JOIN knowledge_library k ON k.id = v.library_id
+         WHERE v.embedding MATCH ? AND k = ?
+           AND k.is_active = 1
+           AND k.purpose = 'voice_example'
+         ORDER BY v.distance
+        """,
+        (packed, 10),
+    )
+    for r in rows:
+        if r["distance"] >= DEDUP_DISTANCE_THRESHOLD:
+            # Rows are sorted by distance ASC — once we cross threshold,
+            # nothing further down is a duplicate either.
+            break
+        row_sl = r.get("service_line")
+        row_scope = r.get("scope")
+        if service_line is None:
+            if row_scope == "universal":
+                return int(r["id"])
+        else:
+            if row_sl == service_line or row_scope == "universal":
+                return int(r["id"])
+    return None
 
 
 def harvest_voice_example(
@@ -81,6 +180,18 @@ def harvest_voice_example(
         return None
 
     sl = (service_line or "").strip() or None
+
+    # Dedup: if a near-duplicate active voice_example already exists in
+    # the same scope, return its id and skip the save. Caller treats this
+    # as "content represented in the library" — same return contract as
+    # a fresh save. The existing row's attribution is preserved.
+    duplicate_id = _find_duplicate_voice_example(body, sl)
+    if duplicate_id is not None:
+        logger.info(
+            "voice_example dedup hit (source=%s sl=%s) — matched library id=%s, skipping save",
+            source, sl, duplicate_id,
+        )
+        return duplicate_id
 
     entry_id = library.add_entry(
         kind="example",

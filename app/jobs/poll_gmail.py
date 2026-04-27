@@ -31,11 +31,9 @@ async def _poll_once() -> int:
         return 0
 
     ids = gmail_tool.list_recent_message_ids(max_results=15)
-    if not ids:
-        return 0
 
     processed = 0
-    for mid in ids:
+    for mid in ids or []:
         # Skip if we already ingested this message (poll overlap or reprocess).
         if fetch_one("SELECT id FROM raw_emails WHERE gmail_message_id=?", (mid,)):
             continue
@@ -49,6 +47,16 @@ async def _poll_once() -> int:
             processed += 1
         except Exception as e:  # noqa: BLE001
             logger.exception("orchestrator.handle failed on %s: %s", mid, e)
+
+    # Phase 1C-3 — outbound harvester. Scan tracked threads for partner
+    # Gmail-direct replies that bypassed Anika, harvest them as voice
+    # examples. Best-effort: any failure is logged and the loop continues.
+    try:
+        from app.jobs.outbound_harvester import harvest_outbound_replies
+        await harvest_outbound_replies()
+    except Exception as e:  # noqa: BLE001
+        logger.warning("outbound_harvester pass failed: %s", e)
+
     return processed
 
 

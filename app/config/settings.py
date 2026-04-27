@@ -52,6 +52,14 @@ class Settings(BaseSettings):
     daily_send_cap: int = Field(default=30)
     undo_window_seconds: int = Field(default=10)
 
+    # Phase 1C-3 — outbound harvester. Comma-separated list of partner
+    # email addresses whose Gmail-direct replies should be harvested as
+    # voice_examples. Default covers Prakash sir; extend when other
+    # partners' inboxes are connected. Comparison is case-insensitive.
+    outbound_harvest_partner_emails: str = Field(
+        default="prakasha@balakrishnaandco.com",
+    )
+
     anika_test_mode: bool = Field(default=False)
     anika_tz: str = Field(default="Asia/Kolkata")
 

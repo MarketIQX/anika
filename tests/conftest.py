@@ -28,6 +28,7 @@ _MODULES_USING_GET_SETTINGS = [
     "app.agents.orchestrator",
     "app.cognitive.learning_engine",
     "app.jobs.poll_gmail",
+    "app.jobs.outbound_harvester",
     "app.main",
     "app.dashboard.routes",
     "app.auth.bootstrap",

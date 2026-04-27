@@ -223,6 +223,26 @@ def fetch_message(message_id: str) -> InboxMessage:
     return _normalize_message(msg)
 
 
+def get_thread(thread_id: str) -> list[InboxMessage]:
+    """Fetch every message in a Gmail thread, normalized into a list.
+
+    Read-only. Used by the outbound harvester (Phase 1C-3) to detect
+    partner Gmail-direct replies on threads Anika is tracking.
+
+    Order: oldest first — Gmail's threads().get default ordering. The
+    harvester relies on this when picking the FIRST partner outbound
+    after the original received_at.
+
+    Raises:
+        HttpError if Gmail API errors out — caller decides retry/skip.
+    """
+    svc = _build_service()
+    resp = svc.users().threads().get(
+        userId="me", id=thread_id, format="full"
+    ).execute()
+    return [_normalize_message(m) for m in resp.get("messages", []) or []]
+
+
 def _header(headers: list[dict], name: str) -> str:
     name_lc = name.lower()
     for h in headers:

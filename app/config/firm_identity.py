@@ -51,3 +51,46 @@ def ensure_signature(body: str) -> str:
     if signature_matches(body):
         return body
     return f"{body.rstrip()}\n\n{SIGNATURE_BLOCK}"
+
+
+# Markers that indicate the start of a signature / sign-off block. The list
+# is canonical here so the approver, the outbound harvester, and any future
+# voice-example consumer share one definition. We cut the body at the
+# EARLIEST marker found and rstrip the result.
+#
+# Each marker begins with "\n" so we never accidentally cut mid-paragraph
+# on a sign-off word that happens to occur in the body text. Adding a new
+# marker is a code change reviewed through git, not a runtime knob.
+SIGNATURE_MARKERS: tuple[str, ...] = (
+    "\nWarm regards,",
+    "\nBest regards,",
+    "\nYours faithfully,",
+    "\nRegards,",
+    "\nSincerely,",
+    "\nS V Prakasha",
+    "\nCA Prakasha",
+    "\nCA S V Prakasha",
+)
+
+
+def strip_signature_block(body: str) -> str:
+    """Return `body` with the trailing signature/sign-off block removed.
+
+    Cuts at the earliest occurrence of any SIGNATURE_MARKERS entry and
+    rstrip()s the result. Used before persisting voice_examples so the
+    saved content teaches BODY voice only — the canonical signature is
+    re-appended at draft time by ensure_signature(), so leaking signature
+    text into voice_examples would cause double-sig on retrieval.
+
+    Returns body unchanged if no marker is found.
+    """
+    if not body:
+        return ""
+    cut_at = len(body)
+    for marker in SIGNATURE_MARKERS:
+        idx = body.find(marker)
+        if 0 <= idx < cut_at:
+            cut_at = idx
+    if cut_at < len(body):
+        return body[:cut_at].rstrip()
+    return body

@@ -61,12 +61,29 @@ Mirror from the retrieved examples:
   - Salutation pattern
   - Opening sentence
   - Structure (paragraphs vs bullets vs framework)
-  - Fee disclosure approach (almost always: do not quote specific fees)
+  - Fee disclosure approach — mirror what the examples and firm_facts do.
+    If retrieved context quotes specific fees, you may quote those same
+    fees verbatim. If retrieved context generalizes (e.g., "fees depend
+    on scope"), generalize the same way. Never invent a fee that isn't
+    in retrieved context.
   - Closing and sign-off pattern
 
 HARD RULES:
   - Never fabricate facts, numbers, or events not in the current email or
     the retrieved facts below.
+  - Ground or generalize — never invent specifics. Quantified claims
+    (fees, monetary amounts in any currency, percentages, client counts,
+    years of experience, country counts, AUM figures, "X clients across
+    Y countries"-style framing) are valid ONLY when the same value
+    appears verbatim in the retrieved firm_facts, voice_examples, or
+    rules below. If a specific is not in retrieved context, use
+    unspecific language instead — examples:
+        "fees depend on scope; happy to discuss after understanding
+         your requirements"
+        "we regularly assist NRI clients"
+        "extensive experience in this area"
+    A real partner quotes a real fee when one exists in firm knowledge.
+    The bug to avoid is INVENTING a number, not quoting a grounded one.
   - Never reference prior conversations that aren't explicitly mentioned.
   - Never mention competitors by name.
   - Never guarantee regulatory outcomes.
@@ -203,7 +220,19 @@ def assemble_prompt(
             "COGNITIVE STATE: LEARNING\n"
             "You have " + str(coverage["count"]) + " voice example(s) for service_line '" + sl_display + "'.\n"
             "Still early in learning. Mirror the voice examples provided below closely.\n"
-            "Remain conservative on credentials - use only what the examples use."
+            "\n"
+            "Grounding discipline (one voice example is not enough to start\n"
+            "inventing specifics it does not contain):\n"
+            "  - Quote a fee, count, percentage, year, or other specific\n"
+            "    ONLY if it appears verbatim in the retrieved voice examples,\n"
+            "    firm_facts, or rules below.\n"
+            "  - If a specific is not in retrieved context, use unspecific\n"
+            "    language ('fees depend on scope; happy to discuss',\n"
+            "    'we regularly assist NRI clients', 'extensive experience').\n"
+            "  - Mirror the example's approach to specifics: if the example\n"
+            "    quotes a fee, you may quote that same fee verbatim; if the\n"
+            "    example generalizes, generalize the same way.\n"
+            "Ground or generalize — never invent."
         )
     else:
         honesty = None  # learned - no banner needed

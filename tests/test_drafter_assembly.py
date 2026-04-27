@@ -118,6 +118,100 @@ def test_applied_counter_bumps(embed_mock):
     assert row_after["last_used_at"] is not None
 
 
+# --- Grounding discipline (1C-3 follow-up bugs) --------------------------
+#
+# Two real bugs were surfaced after phase-1c-3-harvester landed: drafts 36
+# and 29 (cognitive_state='learning') quoted "Rs. 7,500 plus GST" and
+# fabricated "1,500 clients across 30 countries". The bug class is
+# CONFABULATION — Anika invented specifics with no grounding source — not
+# "she said the wrong tokens." A real CA partner DOES quote real fees and
+# real credentials when they exist in firm knowledge; what they don't do
+# is invent them.
+#
+# The architectural fix is "ground or generalize": specifics are valid
+# only when they appear verbatim in retrieved firm_facts, voice_examples,
+# or rules. Otherwise the model uses unspecific language. These tests
+# lock that framing in the prompt; a future edit that quietly reverts to
+# blanket forbidding (or quietly drops the grounding rule) will fail.
+
+
+def test_drafter_header_uses_grounding_discipline_not_blanket_forbid():
+    """Phase 1C-3 follow-up: HARD RULES must require 'ground or generalize',
+    not blanket-forbid currency tokens. Earlier draft prompted with 'almost
+    always do not quote specific fees' which the model exploited; an
+    over-correction to absolute forbid would have blocked legitimate fee
+    quotes once firm_knowledge accrued real fees."""
+    txt = drafter.DRAFTER_HEADER
+    assert "HARD RULES:" in txt
+    hard_rules_section = txt.split("HARD RULES:", 1)[1]
+    txt_lower = hard_rules_section.lower()
+    # The architectural framing must be present.
+    assert "ground or generalize" in txt_lower
+    assert "never invent" in txt_lower
+    # Grounding requires retrieved-context-verbatim.
+    assert "verbatim" in txt_lower
+    assert "retrieved" in txt_lower
+    # Unspecific fallback language must be modeled in the prompt.
+    assert "depend on scope" in txt_lower
+    # The "almost always" hedge that the original model exploited is gone.
+    assert "almost always" not in txt.lower()
+
+
+def test_drafter_header_mirror_section_grounds_fee_disclosure_in_examples():
+    """The Mirror section must tell the model: mirror what the examples do
+    on fees — quote what they quote, generalize what they generalize. NOT
+    a blanket 'never quote'."""
+    txt = drafter.DRAFTER_HEADER
+    mirror_section = txt.split("Mirror from the retrieved examples:", 1)[1]
+    mirror_lower = mirror_section.lower()
+    assert "fee disclosure" in mirror_lower
+    # Framing is "mirror examples", not "never quote".
+    assert "verbatim" in mirror_lower or "mirror" in mirror_lower
+
+
+def test_learning_banner_requires_grounding_not_blanket_forbid(embed_mock):
+    """'learning' state: specifics must be grounded in retrieved voice
+    examples or firm_facts. One voice_example is not enough to invent
+    specifics it doesn't contain. The banner must NOT blanket-forbid
+    currency or credentials — it must require grounding."""
+    # Seed exactly one voice_example so coverage reads 'learning' (1 < 3).
+    kb.add_entry(
+        kind="example",
+        content="Dear Sir,\n\nA prior NRI reply demonstrating voice.\n\nYours faithfully,\nCA Prakasha",
+        service_line="nri_tax",
+        scope="service_line",
+        confidence=1.0,
+    )
+    prompt, _ids, coverage = drafter.assemble_prompt(
+        service_line="nri_tax",
+        enquiry_body="NRI tax + EPF query",
+    )
+    assert coverage["cognitive_state"] == "learning"
+    assert "COGNITIVE STATE: LEARNING" in prompt
+    prompt_lower = prompt.lower()
+    # Grounding language present.
+    assert "ground or generalize" in prompt_lower
+    assert "verbatim" in prompt_lower
+    # Unspecific fallbacks modeled.
+    assert "depend on scope" in prompt_lower
+
+
+def test_cold_start_banner_still_intact(embed_mock):
+    """Regression: cold_start banner is unchanged by this fix (its
+    blanket-forbid framing remains correct because in cold_start there
+    are by definition no service-line voice_examples to ground from —
+    default-unspecific is the right answer there)."""
+    # Empty library → cold_start.
+    prompt, _ids, coverage = drafter.assemble_prompt(
+        service_line="nri_tax",
+        enquiry_body="anything",
+    )
+    assert coverage["cognitive_state"] == "cold_start"
+    assert "COGNITIVE STATE: COLD START" in prompt
+    # The existing cold_start anti-marketing language is preserved.
+    assert "Do NOT quote firm credentials" in prompt
+
+
 # --- Library retrieval helpers --------------------------------------------
 
 

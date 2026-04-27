@@ -192,7 +192,9 @@ def test_happy_path_partner_outbound_harvested(monkeypatch):
 
 
 def test_thread_with_no_partner_outbound_no_save(monkeypatch):
-    """Thread has only the original enquiry — no harvest, row stays NULL."""
+    """Thread has only the original enquiry — no harvest, but
+    outbound_last_scanned_at IS bumped (so next cycle respects backoff
+    instead of immediately rescanning)."""
     enquiry_ts = _ts(0)
     eid = _seed_email(message_id="m-orig", thread_id="t-2", received_at=enquiry_ts)
     enquiry_msg = _msg(
@@ -208,8 +210,12 @@ def test_thread_with_no_partner_outbound_no_save(monkeypatch):
     assert counters["harvested"] == 0
     assert counters["skipped_no_outbound"] == 1
 
-    row = fetch_one("SELECT outbound_reply_gmail_id FROM raw_emails WHERE id=?", (eid,))
+    row = fetch_one(
+        "SELECT outbound_reply_gmail_id, outbound_last_scanned_at "
+        "FROM raw_emails WHERE id=?", (eid,)
+    )
     assert row["outbound_reply_gmail_id"] is None
+    assert row["outbound_last_scanned_at"] is not None  # backoff guard set
 
     voice = fetch_all("SELECT id FROM knowledge_library WHERE purpose='voice_example'")
     assert len(voice) == 0
@@ -319,10 +325,21 @@ def test_gmail_api_error_increments_counter_no_crash(monkeypatch):
     assert counters["errors"] == 1
     assert counters["harvested"] == 1  # the OK one still goes through
 
-    bad = fetch_one("SELECT outbound_reply_gmail_id FROM raw_emails WHERE id=?", (eid_bad,))
-    ok = fetch_one("SELECT outbound_reply_gmail_id FROM raw_emails WHERE id=?", (eid_ok,))
-    assert bad["outbound_reply_gmail_id"] is None  # not marked, retried next cycle
+    bad = fetch_one(
+        "SELECT outbound_reply_gmail_id, outbound_last_scanned_at "
+        "FROM raw_emails WHERE id=?", (eid_bad,)
+    )
+    ok = fetch_one(
+        "SELECT outbound_reply_gmail_id, outbound_last_scanned_at "
+        "FROM raw_emails WHERE id=?", (eid_ok,)
+    )
+    # Bad row: not harvested (so outbound_reply_gmail_id stays NULL) BUT
+    # last_scanned_at is bumped — next cycle respects backoff, no thrash.
+    assert bad["outbound_reply_gmail_id"] is None
+    assert bad["outbound_last_scanned_at"] is not None
+    # Ok row: harvested normally, both columns set.
     assert ok["outbound_reply_gmail_id"] == "gmail-ok-reply"
+    assert ok["outbound_last_scanned_at"] is not None
 
 
 def test_no_credentials_short_circuits(monkeypatch):
@@ -356,3 +373,129 @@ def test_partner_message_at_or_before_received_at_ignored(monkeypatch):
     counters = _run()
     assert counters["harvested"] == 0
     assert counters["skipped_no_outbound"] == 1
+
+
+# --- Backoff scan logic (1C-3 fix) ---------------------------------------
+#
+# After every scan attempt, outbound_last_scanned_at is bumped. The SQL
+# filter skips rows scanned within an age-based backoff window. Each
+# of these tests pins one cell of the curve so a future edit that
+# loosens or breaks it fails loudly.
+
+
+def _set_last_scanned(eid: int, ts: str) -> None:
+    """Helper: simulate a prior scan at `ts` ISO timestamp."""
+    execute(
+        "UPDATE raw_emails SET outbound_last_scanned_at=? WHERE id=?",
+        (ts, eid),
+    )
+
+
+def test_backoff_skips_recent_email_just_scanned(monkeypatch):
+    """A <1hr-old email scanned 1 minute ago is skipped (5 min window for
+    fresh enquiries). The row is excluded by the SQL filter, not the
+    Python loop — get_thread is never invoked."""
+    enquiry_ts = _ts(0)
+    eid = _seed_email(message_id="m-back-1", thread_id="t-back-1", received_at=enquiry_ts)
+    one_min_ago = _ts(-60)
+    _set_last_scanned(eid, one_min_ago)
+    # Default mock raises NotImplementedError on get_thread call; if the
+    # filter fails to skip, the test crashes with that.
+    counters = _run()
+    assert counters["harvested"] == 0
+    assert counters["skipped_no_outbound"] == 0  # not even seen
+    assert counters["errors"] == 0
+    row = fetch_one(
+        "SELECT outbound_last_scanned_at FROM raw_emails WHERE id=?", (eid,)
+    )
+    # Unchanged because the row was never visited.
+    assert row["outbound_last_scanned_at"] == one_min_ago
+
+
+def test_backoff_picks_up_recent_email_after_5min_window(monkeypatch):
+    """A <1hr-old email scanned 6 minutes ago IS rescanned (>5 min window)."""
+    enquiry_ts = _ts(0)
+    eid = _seed_email(message_id="m-back-2", thread_id="t-back-2", received_at=enquiry_ts)
+    six_min_ago = _ts(-360)
+    _set_last_scanned(eid, six_min_ago)
+    enquiry_msg = _msg(
+        message_id="m-back-2", thread_id="t-back-2",
+        from_email=ENQUIRER, body="just the original",
+        received_at=enquiry_ts,
+    )
+    monkeypatch.setattr(gmail_tool, "get_thread", lambda tid: [enquiry_msg])
+
+    counters = _run()
+    assert counters["skipped_no_outbound"] == 1  # was scanned this cycle
+    row = fetch_one(
+        "SELECT outbound_last_scanned_at FROM raw_emails WHERE id=?", (eid,)
+    )
+    # Bumped to a more recent timestamp.
+    assert row["outbound_last_scanned_at"] != six_min_ago
+
+
+def test_backoff_old_email_uses_long_window(monkeypatch):
+    """A 2-day-old email scanned 4 hours ago IS skipped — the ≥1d age
+    bucket uses a 1-day rescan window, so 4 hours isn't enough."""
+    two_days_ago = (datetime.now(timezone.utc) - timedelta(days=2)).strftime(
+        "%Y-%m-%dT%H:%M:%fZ"
+    )
+    eid = _seed_email(
+        message_id="m-back-3", thread_id="t-back-3", received_at=two_days_ago
+    )
+    four_hr_ago = (datetime.now(timezone.utc) - timedelta(hours=4)).strftime(
+        "%Y-%m-%dT%H:%M:%fZ"
+    )
+    _set_last_scanned(eid, four_hr_ago)
+    counters = _run()
+    assert counters["harvested"] == 0
+    assert counters["skipped_no_outbound"] == 0  # excluded by SQL filter
+    assert counters["errors"] == 0
+
+
+def test_first_scan_picks_up_never_scanned_row(monkeypatch):
+    """A row with outbound_last_scanned_at IS NULL is always eligible —
+    backoff has no effect on the first scan."""
+    enquiry_ts = _ts(0)
+    eid = _seed_email(message_id="m-back-4", thread_id="t-back-4", received_at=enquiry_ts)
+    # Confirm starting state.
+    pre = fetch_one(
+        "SELECT outbound_last_scanned_at FROM raw_emails WHERE id=?", (eid,)
+    )
+    assert pre["outbound_last_scanned_at"] is None
+
+    enquiry_msg = _msg(
+        message_id="m-back-4", thread_id="t-back-4",
+        from_email=ENQUIRER, body="orig", received_at=enquiry_ts,
+    )
+    monkeypatch.setattr(gmail_tool, "get_thread", lambda tid: [enquiry_msg])
+    counters = _run()
+    assert counters["skipped_no_outbound"] == 1
+    post = fetch_one(
+        "SELECT outbound_last_scanned_at FROM raw_emails WHERE id=?", (eid,)
+    )
+    assert post["outbound_last_scanned_at"] is not None
+
+
+def test_last_scanned_at_bumped_even_on_gmail_error(monkeypatch):
+    """When get_thread raises HttpError, last_scanned_at is still bumped —
+    no thrash on persistently-broken threads. Backoff window applies
+    independent of outcome."""
+    enquiry_ts = _ts(0)
+    eid = _seed_email(
+        message_id="m-back-5", thread_id="t-back-5", received_at=enquiry_ts
+    )
+
+    def _raises(thread_id):
+        raise HttpError(
+            resp=type("R", (), {"status": 500, "reason": "boom"})(),
+            content=b"err",
+        )
+    monkeypatch.setattr(gmail_tool, "get_thread", _raises)
+
+    counters = _run()
+    assert counters["errors"] == 1
+    row = fetch_one(
+        "SELECT outbound_last_scanned_at FROM raw_emails WHERE id=?", (eid,)
+    )
+    assert row["outbound_last_scanned_at"] is not None

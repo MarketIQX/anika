@@ -35,6 +35,7 @@ Idempotency:
 from __future__ import annotations
 
 import logging
+from datetime import datetime, timedelta, timezone
 
 from googleapiclient.errors import HttpError
 
@@ -48,6 +49,27 @@ from app.tools.gmail_tool import InboxMessage
 logger = logging.getLogger(__name__)
 
 
+# Codebase timestamp format: gmail_tool._normalize_message stores received_at
+# via Python strftime("%Y-%m-%dT%H:%M:%fZ") — Python's "%f" is microseconds,
+# not fractional seconds, so the produced string ("HH:MM:µµµµµµZ") is NOT
+# parseable by SQLite's julianday(). Comparisons work LEXICALLY only, and
+# only when both sides use the SAME format. We therefore generate every
+# timestamp the harvester writes (and every cutoff it compares against) in
+# Python with this exact format. Lexical string comparison then orders
+# correctly because all fields are fixed-width.
+_TS_FORMAT = "%Y-%m-%dT%H:%M:%fZ"
+
+
+def _iso_now() -> str:
+    return datetime.now(timezone.utc).strftime(_TS_FORMAT)
+
+
+def _iso_ago(seconds: int) -> str:
+    return (datetime.now(timezone.utc) - timedelta(seconds=seconds)).strftime(
+        _TS_FORMAT
+    )
+
+
 HARVEST_LOOKBACK_DAYS = 7
 HARVEST_MAX_PER_CYCLE = 50
 
@@ -55,6 +77,37 @@ HARVEST_MAX_PER_CYCLE = 50
 # applies MIN_BODY_CHARS=50 after signature strip, but checking here too
 # saves an embed call on obvious one-liners ("thanks", "noted", etc.).
 HARVEST_MIN_BODY_CHARS = 50
+
+
+# Per-row scan backoff. The harvester previously rescanned every
+# no-outbound thread on every 30s poll cycle (in production: 77 redundant
+# gmail_tool.get_thread calls per cycle, ~30s of event-loop blocking).
+#
+# After every scan attempt — success, no-outbound, short-body, harvest
+# error, gmail error — outbound_last_scanned_at is bumped on the row.
+# The SQL filter below skips rows scanned within an age-based backoff
+# window. Fresh enquiries (most likely to attract a reply) are rescanned
+# often; stale ones rarely.
+#
+#   Email age    | Rescan interval
+#   -------------|----------------
+#   <1 hr        | 5 min
+#   1-6 hr       | 30 min
+#   6-24 hr      | 2 hr
+#   1-7 days     | 1 day
+#
+# A row that has never been scanned (outbound_last_scanned_at IS NULL) is
+# always eligible. Once last_scanned_at is set, backoff applies even on
+# error paths — broken threads don't thrash.
+#
+# The exact arithmetic lives in the SQL CASE expression below; this
+# tuple is documentation. (max_age_seconds, rescan_interval_seconds).
+BACKOFF_CURVE = (
+    (3600,    300),    # <1 hr  →  5 min
+    (21600,   1800),   # 1-6 hr →  30 min
+    (86400,   7200),   # 6-24 hr → 2 hr
+    (604800,  86400),  # 1-7 d  →  1 day
+)
 
 
 def _partner_email_set() -> set[str]:
@@ -138,26 +191,65 @@ async def harvest_outbound_replies() -> dict[str, int]:
         "errors": 0,
     }
 
+    # Backoff filter: rows are eligible when outbound_last_scanned_at IS
+    # NULL (never scanned) OR last scan happened BEFORE the appropriate
+    # backoff cutoff for the email's age. All timestamps are Python-format
+    # (see _TS_FORMAT comment) so this is a pure lexical comparison.
+    cutoff_lookback = _iso_ago(HARVEST_LOOKBACK_DAYS * 86400)
+    cutoff_age_1hr = _iso_ago(3600)         # received_at > this  →  age <1hr
+    cutoff_age_6hr = _iso_ago(21600)
+    cutoff_age_1d = _iso_ago(86400)
+    cutoff_scan_5min = _iso_ago(300)        # last_scan < this    →  scan >5min ago
+    cutoff_scan_30min = _iso_ago(1800)
+    cutoff_scan_2hr = _iso_ago(7200)
+    cutoff_scan_1d = _iso_ago(86400)
+
     rows = fetch_all(
-        f"""
+        """
         SELECT id, gmail_thread_id, received_at
           FROM raw_emails
          WHERE outbound_reply_gmail_id IS NULL
            AND gmail_thread_id IS NOT NULL
            AND gmail_thread_id != ''
-           AND received_at > strftime(
-               '%Y-%m-%dT%H:%M:%fZ', 'now', '-{HARVEST_LOOKBACK_DAYS} days'
+           AND received_at > ?
+           AND (
+             outbound_last_scanned_at IS NULL
+             OR outbound_last_scanned_at <
+                CASE
+                  WHEN received_at > ? THEN ?    -- age <1hr  → skip if scan >5min ago
+                  WHEN received_at > ? THEN ?    -- age <6hr  → skip if scan >30min ago
+                  WHEN received_at > ? THEN ?    -- age <1d   → skip if scan >2hr ago
+                  ELSE ?                          -- age >=1d  → skip if scan >1d ago
+                END
            )
          ORDER BY received_at DESC
          LIMIT ?
         """,
-        (HARVEST_MAX_PER_CYCLE,),
+        (
+            cutoff_lookback,
+            cutoff_age_1hr, cutoff_scan_5min,
+            cutoff_age_6hr, cutoff_scan_30min,
+            cutoff_age_1d, cutoff_scan_2hr,
+            cutoff_scan_1d,
+            HARVEST_MAX_PER_CYCLE,
+        ),
     )
 
     for row in rows:
         email_id = int(row["id"])
         thread_id = row["gmail_thread_id"]
         original_received_at = row["received_at"]
+
+        # Mark scan attempt before any branching. Bumped on every code path
+        # below (success, no-outbound, short-body, harvest-error,
+        # gmail-error) — broken threads don't thrash, and the next cycle
+        # respects the backoff window regardless of outcome. Use the same
+        # Python timestamp format as received_at so backoff comparisons
+        # are lexically correct.
+        execute(
+            "UPDATE raw_emails SET outbound_last_scanned_at = ? WHERE id = ?",
+            (_iso_now(), email_id),
+        )
 
         try:
             messages = gmail_tool.get_thread(thread_id)

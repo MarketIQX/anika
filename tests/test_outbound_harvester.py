@@ -21,6 +21,7 @@ import asyncio
 import hashlib
 import math
 import random
+import threading
 from datetime import datetime, timedelta, timezone
 
 import pytest
@@ -499,3 +500,37 @@ def test_last_scanned_at_bumped_even_on_gmail_error(monkeypatch):
         "SELECT outbound_last_scanned_at FROM raw_emails WHERE id=?", (eid,)
     )
     assert row["outbound_last_scanned_at"] is not None
+
+
+# --- Async wrapping (1C-3 fix commit 3) ----------------------------------
+
+
+def test_get_thread_runs_off_main_event_loop_thread(monkeypatch):
+    """Phase 1C-3 fix: gmail_tool.get_thread is a synchronous wrapper
+    around blocking HTTP. The harvester invokes it via asyncio.to_thread
+    so the FastAPI event loop continues serving requests during the
+    Google round-trip. This test pins that invariant by having the
+    mocked get_thread record its own thread; if a future edit reverts
+    to a direct synchronous call, the captured thread will match the
+    main thread and this test fails."""
+    enquiry_ts = _ts(0)
+    eid = _seed_email(
+        message_id="m-async", thread_id="t-async", received_at=enquiry_ts
+    )
+
+    captured: list[threading.Thread] = []
+    main_thread = threading.current_thread()
+
+    def capturing_get_thread(thread_id):
+        captured.append(threading.current_thread())
+        return []  # no messages → no harvest, but get_thread WAS called
+
+    monkeypatch.setattr(gmail_tool, "get_thread", capturing_get_thread)
+
+    counters = _run()
+    assert counters["skipped_no_outbound"] == 1
+    assert len(captured) == 1
+    # The capturing function ran in a worker thread, NOT on the main
+    # thread that owns the asyncio event loop. asyncio.to_thread uses
+    # the default ThreadPoolExecutor, so the executor thread is distinct.
+    assert captured[0] is not main_thread

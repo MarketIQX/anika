@@ -30,7 +30,11 @@ async def _poll_once() -> int:
         # Can't poll without OAuth — dashboard shows a banner to connect Gmail.
         return 0
 
-    ids = gmail_tool.list_recent_message_ids(max_results=15)
+    # Sync Gmail calls (googleapiclient is blocking) go through
+    # asyncio.to_thread so the FastAPI event loop stays responsive during
+    # the HTTP round-trip. Without this, every poll cycle would freeze
+    # page handlers for ~300-500ms × N calls.
+    ids = await asyncio.to_thread(gmail_tool.list_recent_message_ids, max_results=15)
 
     processed = 0
     for mid in ids or []:
@@ -38,7 +42,7 @@ async def _poll_once() -> int:
         if fetch_one("SELECT id FROM raw_emails WHERE gmail_message_id=?", (mid,)):
             continue
         try:
-            msg = gmail_tool.fetch_message(mid)
+            msg = await asyncio.to_thread(gmail_tool.fetch_message, mid)
         except Exception as e:  # noqa: BLE001
             logger.error("Failed to fetch %s: %s", mid, e)
             continue

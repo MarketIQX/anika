@@ -34,6 +34,7 @@ Idempotency:
 """
 from __future__ import annotations
 
+import asyncio
 import logging
 from datetime import datetime, timedelta, timezone
 
@@ -252,7 +253,14 @@ async def harvest_outbound_replies() -> dict[str, int]:
         )
 
         try:
-            messages = gmail_tool.get_thread(thread_id)
+            # gmail_tool.get_thread is a synchronous wrapper around the
+            # blocking googleapiclient HTTP call. asyncio.to_thread
+            # offloads it to the default ThreadPoolExecutor so the
+            # FastAPI event loop continues serving requests during the
+            # ~300-500ms Google round-trip. Without this, ~30s of
+            # blocking I/O per cycle freezes page handlers (see the
+            # 2-minute page-load incident that motivated this fix).
+            messages = await asyncio.to_thread(gmail_tool.get_thread, thread_id)
         except HttpError as e:
             logger.warning(
                 "outbound_harvester: get_thread failed for thread=%s email_id=%s: %s",

@@ -494,6 +494,90 @@ CREATE INDEX IF NOT EXISTS idx_access_log_user ON access_log(user_email);
 CREATE INDEX IF NOT EXISTS idx_access_log_action ON access_log(action);
 CREATE INDEX IF NOT EXISTS idx_access_log_created ON access_log(created_at);
 
+-- ---------------------------------------------------------------------------
+-- Phase 1C-1: self-measurement.
+--
+-- draft_metrics — one row per email-journey that reaches a terminal state
+-- (sent or rejected). Captures the edit-distance between Anika's first
+-- draft for that email and the FINAL state of the draft chain — i.e. how
+-- much human-correction was needed before approval.
+--
+-- Lower edit_distance over time per service_line ⇒ Anika is genuinely
+-- learning that service's voice. This table is the data substrate for the
+-- /train/learning-curves panel and (in Phase 1C-2) for the pattern-
+-- recognition agent.
+--
+-- Why "journey" not "per draft": one approval can sit at the end of a
+-- chain (first draft → edit → second draft → approve). The journey metric
+-- captures the WHOLE conversation Anika had with the partner — that's
+-- what reflects learning, not any single round.
+-- ---------------------------------------------------------------------------
+
+CREATE TABLE IF NOT EXISTS draft_metrics (
+    id                    INTEGER PRIMARY KEY AUTOINCREMENT,
+    email_id              INTEGER NOT NULL REFERENCES raw_emails(id) ON DELETE CASCADE,
+    -- Root of the draft chain (parent_draft_id IS NULL) — Anika's first attempt.
+    first_draft_id        INTEGER NOT NULL REFERENCES drafts(id),
+    -- Tip of the chain — the draft that was approved (sent) or rejected.
+    final_draft_id        INTEGER NOT NULL REFERENCES drafts(id),
+    -- Terminal state of the journey.
+    final_outcome         TEXT NOT NULL CHECK (final_outcome IN ('sent','rejected')),
+    -- Snapshots from the FIRST draft (so we can compare same-state drafts).
+    service_line          TEXT,
+    cognitive_state       TEXT,                 -- cold_start | learning | learned | NULL
+    voice_coverage_count  INTEGER,
+    -- Length of the draft chain. 1 = approved/rejected on first attempt.
+    chain_length          INTEGER NOT NULL DEFAULT 1,
+    -- SequenceMatcher-based: 1.0 - similarity_ratio between first.body and
+    -- final.body. 0.0 = identical (no edit needed). 1.0 = complete rewrite.
+    -- For 'rejected' journeys we still compute it from first.body to
+    -- final.body — even a rejection captures "how far apart was Anika's
+    -- attempt from what got dismissed".
+    edit_distance         REAL,
+    similarity_ratio      REAL,
+    -- Wall-clock duration from first draft to terminal state, in seconds.
+    duration_seconds      INTEGER,
+    created_at            TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+);
+CREATE INDEX IF NOT EXISTS idx_draft_metrics_service ON draft_metrics(service_line);
+CREATE INDEX IF NOT EXISTS idx_draft_metrics_outcome ON draft_metrics(final_outcome);
+CREATE INDEX IF NOT EXISTS idx_draft_metrics_created ON draft_metrics(created_at);
+
+-- ---------------------------------------------------------------------------
+-- reflection_log — Phase 1C-1 schema placeholder for Phase 1C-2.
+--
+-- Captures Anika's own narrative observations about her performance over
+-- time, e.g. "Edit distance for nri_tax over the last 5 sent drafts:
+-- 0.32 → 0.28 → 0.21 → 0.18 → 0.15. Trending down — voice is being
+-- learned." 1C-1 only sets up the table; the writer (a self-reflection
+-- agent that scans draft_metrics for trends) lands in 1C-2.
+--
+-- Distinct from reasoning_log (which captures per-call decisions) —
+-- reflection_log captures aggregate observations Anika makes ABOUT
+-- herself. The Drafter reads recent reflections in 1C-2 to inform
+-- prompt assembly, closing the meta-cognitive loop.
+-- ---------------------------------------------------------------------------
+
+CREATE TABLE IF NOT EXISTS reflection_log (
+    id               INTEGER PRIMARY KEY AUTOINCREMENT,
+    -- Service line the reflection concerns (NULL = universal observation).
+    service_line     TEXT,
+    -- Type of observation: edit_distance_trend, voice_coverage_milestone,
+    -- cognitive_state_transition, edit_pattern, etc.
+    observation_type TEXT NOT NULL,
+    -- Human-readable narrative — meant to be read on the Train tab.
+    narrative        TEXT NOT NULL,
+    -- Raw numbers that backed the narrative (JSON).
+    numeric_data     TEXT NOT NULL DEFAULT '{}',
+    -- Whether this reflection has been incorporated into the active
+    -- Drafter prompt (used in 1C-2 to avoid double-injecting).
+    incorporated     INTEGER NOT NULL DEFAULT 0,
+    created_at       TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+);
+CREATE INDEX IF NOT EXISTS idx_reflection_service ON reflection_log(service_line);
+CREATE INDEX IF NOT EXISTS idx_reflection_type ON reflection_log(observation_type);
+CREATE INDEX IF NOT EXISTS idx_reflection_created ON reflection_log(created_at);
+
 -- Append-only — block UPDATE and DELETE on access_log.
 DROP TRIGGER IF EXISTS access_log_no_update;
 CREATE TRIGGER access_log_no_update

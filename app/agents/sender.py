@@ -146,6 +146,16 @@ async def send_approved_draft(draft_id: int, approval_id: int) -> int:
     except Exception as e:  # noqa: BLE001
         logger.warning("harvest_approved_draft failed for %s: %s", draft_id, e)
 
+    # Phase 1C-1: compute journey metric (non-fatal). Captures edit-distance
+    # from Anika's first draft to the approved-and-sent body, per service
+    # line, so /train/learning-curves can show real adaptation over time.
+    try:
+        from app.cognitive.draft_metrics import compute_journey_metric
+
+        compute_journey_metric(int(row["email_id"]), outcome="sent")
+    except Exception as e:  # noqa: BLE001
+        logger.warning("draft_metrics on send failed for draft %s: %s", draft_id, e)
+
     reasoning_log.log(
         agent_name="sender",
         input_obj={"draft_id": draft_id, "approval_id": approval_id, "test_mode": test_mode},

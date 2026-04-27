@@ -272,6 +272,17 @@ def reject(
         "UPDATE drafts SET sent_status='rejected' WHERE id=? AND sent_status='pending_approval'",
         (draft_id,),
     )
+
+    # Phase 1C-1: capture rejection in the metrics stream (non-fatal). Even a
+    # rejected journey carries learning signal — "first draft was too far off
+    # to salvage" is real data when aggregated per service line.
+    try:
+        from app.cognitive.draft_metrics import compute_journey_metric
+
+        compute_journey_metric(int(row["email_id"]), outcome="rejected")
+    except Exception as e:  # noqa: BLE001
+        logger.warning("draft_metrics on reject failed for draft %s: %s", draft_id, e)
+
     reasoning_log.log(
         agent_name="approver",
         input_obj={"decision": "rejected", "draft_id": draft_id, "note": note},

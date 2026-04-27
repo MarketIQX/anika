@@ -428,6 +428,10 @@ async def train_index(request: Request, user: User = Depends(require_user)):
             except Exception:  # noqa: BLE001
                 pass
 
+    # Phase 1C-1 — self-measurement summary on the Train tab.
+    from app.cognitive.draft_metrics import per_service_line_summary
+    learning_curves = per_service_line_summary()
+
     ctx = _common_context(request, user)
     ctx.update({
         "pending_proposals": pending_proposals,
@@ -442,9 +446,30 @@ async def train_index(request: Request, user: User = Depends(require_user)):
         "approvals_stats": approvals_stats,
         "prompt_preview": prompt_preview,
         "drafting_paused": drafting_paused.is_on(),
+        "learning_curves": learning_curves,
         "active_tab": "train",
     })
     return templates.TemplateResponse(request, "train.html", ctx)
+
+
+# --- Phase 1C-1: learning curves detail page -------------------------------
+
+
+@router.get("/train/learning-curves", response_class=HTMLResponse)
+async def train_learning_curves(request: Request, user: User = Depends(require_user)):
+    """Detailed timeline view of every metric. Both roles can read this —
+    Prakasha sir benefits from seeing the curve as much as AK does."""
+    from app.cognitive.draft_metrics import per_service_line_summary, recent_metrics
+
+    summary = per_service_line_summary()
+    timeline = recent_metrics(limit=50)
+    ctx = _common_context(request, user)
+    ctx.update({
+        "summary": summary,
+        "timeline": timeline,
+        "active_tab": "train",
+    })
+    return templates.TemplateResponse(request, "learning_curves.html", ctx)
 
 
 # --- Teach (text + files) --------------------------------------------------

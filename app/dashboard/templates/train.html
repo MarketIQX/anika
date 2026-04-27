@@ -24,8 +24,73 @@
        class="bg-slate-100 hover:bg-slate-200 text-slate-700 px-3 py-2 rounded text-sm font-medium">
       📋 Manage rules
     </a>
+    <a href="/train/learning-curves"
+       class="bg-slate-100 hover:bg-slate-200 text-slate-700 px-3 py-2 rounded text-sm font-medium">
+      📈 Learning curves
+    </a>
   </div>
 </div>
+
+<!-- ======================================================================
+     Section L — Learning curves summary (Phase 1C-1)
+     One row per service line. Edit-distance trend over time.
+     ====================================================================== -->
+
+{% if learning_curves %}
+<section class="mb-8">
+  <div class="flex items-baseline justify-between mb-2">
+    <h2 class="text-lg font-semibold">How Anika is learning</h2>
+    <a href="/train/learning-curves" class="text-xs text-slate-500 hover:text-slate-900 underline">Full timeline →</a>
+  </div>
+  <p class="text-sm text-slate-600 mb-4">
+    Edit-distance from Anika's first draft to the final approved (or rejected)
+    body — measured per service line. Lower means fewer corrections.
+  </p>
+
+  <div class="grid md:grid-cols-2 gap-3">
+    {% for c in learning_curves %}
+      <div class="bg-white border border-slate-200 rounded-lg p-4">
+        <div class="flex items-baseline justify-between mb-1">
+          <div class="text-sm font-medium">{{ c.service_line }}</div>
+          {% if c.trend == 'improving' %}
+            <span class="text-xs px-2 py-0.5 rounded bg-emerald-100 text-emerald-800">↓ improving</span>
+          {% elif c.trend == 'regressing' %}
+            <span class="text-xs px-2 py-0.5 rounded bg-rose-100 text-rose-800">↑ regressing</span>
+          {% elif c.trend == 'stable' %}
+            <span class="text-xs px-2 py-0.5 rounded bg-slate-100 text-slate-700">→ stable</span>
+          {% else %}
+            <span class="text-xs px-2 py-0.5 rounded bg-slate-100 text-slate-500">need more data</span>
+          {% endif %}
+        </div>
+        <div class="text-xs text-slate-500 mb-2">
+          {{ c.sent_count }} sent · {{ c.rejected_count }} rejected
+          {% if c.cold_start_count or c.learning_count or c.learned_count %}
+            ·
+            {% if c.cold_start_count %}<span class="text-rose-700">{{ c.cold_start_count }} cold</span>{% endif %}
+            {% if c.learning_count %} <span class="text-amber-700">{{ c.learning_count }} learning</span>{% endif %}
+            {% if c.learned_count %} <span class="text-emerald-700">{{ c.learned_count }} learned</span>{% endif %}
+          {% endif %}
+        </div>
+        {% if c.recent5_distances %}
+          <div class="flex items-end gap-1 h-10 mb-1">
+            {% for d in c.recent5_distances %}
+              {# Sparkline-style bar — taller bar = larger edit_distance = more correction #}
+              <div class="flex-1 bg-slate-200 rounded-sm relative" style="height: {{ ((d * 100)|round|int) }}%;"
+                   title="edit_distance = {{ '%.2f'|format(d) }}"></div>
+            {% endfor %}
+          </div>
+          <div class="flex justify-between text-xs text-slate-500">
+            <span>last {{ c.recent5_distances|length }} sent</span>
+            <span>recent avg: {{ '%.0f'|format(c.recent5_mean * 100) }}%</span>
+          </div>
+        {% else %}
+          <div class="text-xs text-slate-400 italic">no sent metrics yet</div>
+        {% endif %}
+      </div>
+    {% endfor %}
+  </div>
+</section>
+{% endif %}
 
 <!-- ======================================================================
      Section 0 — Awaiting your confirmation (Phase 1B)

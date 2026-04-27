@@ -64,3 +64,5 @@ Most are read-only probes. A few do mutate state (anything `fix_*` or
 Don't add new scripts here. New tooling lives under `scripts/` proper, or
 under `tests/` if it's verifiable code. This archive is closed for new
 admissions — its contents are immutable.
+
+April 27 (Phase 1C): added 10 more scripts from Monday's debugging.

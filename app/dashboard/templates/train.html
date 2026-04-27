@@ -36,6 +36,88 @@
      One row per service line. Edit-distance trend over time.
      ====================================================================== -->
 
+{% if open_patterns %}
+<section class="mb-8">
+  <div class="flex items-baseline justify-between mb-2">
+    <h2 class="text-lg font-semibold">
+      Patterns Anika has noticed
+      {% if pattern_counts and pattern_counts.open %}
+        <span class="text-sm font-normal text-slate-500">({{ pattern_counts.open }} open)</span>
+      {% endif %}
+    </h2>
+    {% if pattern_counts %}
+      <span class="text-xs text-slate-500">
+        {{ pattern_counts.promoted }} promoted · {{ pattern_counts.dismissed }} dismissed
+      </span>
+    {% endif %}
+  </div>
+  <p class="text-sm text-slate-600 mb-4">
+    Phrases you've consistently removed (or added) when editing my drafts.
+    Promote a pattern to a meta-rule so I apply it on every future draft, or
+    dismiss it if it isn't a real signal.
+  </p>
+
+  <div class="bg-white border border-slate-200 rounded-lg overflow-hidden">
+    <table class="w-full text-sm">
+      <thead class="bg-slate-100 text-xs uppercase text-slate-600">
+        <tr>
+          <th class="text-left px-3 py-2">Service line</th>
+          <th class="text-left px-3 py-2">Kind</th>
+          <th class="text-left px-3 py-2">Phrase</th>
+          <th class="text-left px-3 py-2">Seen in</th>
+          <th class="text-right px-3 py-2">Actions</th>
+        </tr>
+      </thead>
+      <tbody class="divide-y">
+        {% for p in open_patterns %}
+          <tr>
+            <td class="px-3 py-2 text-xs">
+              {% if p.service_line %}
+                <span class="px-2 py-0.5 rounded bg-sky-100 text-sky-800">{{ p.service_line }}</span>
+              {% else %}
+                <span class="text-slate-400">universal</span>
+              {% endif %}
+            </td>
+            <td class="px-3 py-2 text-xs">
+              {% if p.pattern_kind == 'removed_phrase' %}
+                <span class="px-2 py-0.5 rounded bg-rose-100 text-rose-800">removed</span>
+              {% else %}
+                <span class="px-2 py-0.5 rounded bg-emerald-100 text-emerald-800">added</span>
+              {% endif %}
+            </td>
+            <td class="px-3 py-2 text-sm font-mono text-slate-800">"{{ p.pattern_text }}"</td>
+            <td class="px-3 py-2 text-xs">
+              {{ p.occurrences }} edit{{ '' if p.occurrences == 1 else 's' }}
+              {% if p.sample_email_ids_list %}
+                <span class="text-slate-400">· examples:
+                  {% for eid in p.sample_email_ids_list %}
+                    <a href="/inbox/{{ eid }}" class="underline hover:text-slate-700">#{{ eid }}</a>{% if not loop.last %}, {% endif %}
+                  {% endfor %}
+                </span>
+              {% endif %}
+            </td>
+            <td class="px-3 py-2 text-right whitespace-nowrap">
+              <form method="post" action="/train/patterns/{{ p.id }}/promote" class="inline">
+                <button type="submit"
+                        class="text-xs px-2 py-1 rounded bg-emerald-600 text-white hover:bg-emerald-700">
+                  Promote
+                </button>
+              </form>
+              <form method="post" action="/train/patterns/{{ p.id }}/dismiss" class="inline">
+                <button type="submit"
+                        class="text-xs px-2 py-1 rounded bg-slate-200 text-slate-800 hover:bg-slate-300">
+                  Dismiss
+                </button>
+              </form>
+            </td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>
+{% endif %}
+
 {% if learning_curves %}
 <section class="mb-8">
   <div class="flex items-baseline justify-between mb-2">

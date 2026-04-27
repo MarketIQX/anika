@@ -283,6 +283,15 @@ def reject(
     except Exception as e:  # noqa: BLE001
         logger.warning("draft_metrics on reject failed for draft %s: %s", draft_id, e)
 
+    # Phase 1C-2: rejected journeys also feed pattern recognition — the
+    # rejection-edit deltas ("first draft was too cold") are real signal.
+    try:
+        from app.cognitive.pattern_miner import mine_patterns
+
+        mine_patterns(email_id=int(row["email_id"]))
+    except Exception as e:  # noqa: BLE001
+        logger.warning("pattern_miner on reject failed for draft %s: %s", draft_id, e)
+
     reasoning_log.log(
         agent_name="approver",
         input_obj={"decision": "rejected", "draft_id": draft_id, "note": note},

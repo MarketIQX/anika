@@ -432,6 +432,11 @@ async def train_index(request: Request, user: User = Depends(require_user)):
     from app.cognitive.draft_metrics import per_service_line_summary
     learning_curves = per_service_line_summary()
 
+    # Phase 1C-2 — substring patterns Anika has noticed.
+    from app.cognitive.pattern_miner import counts_by_status, list_open_patterns
+    open_patterns = list_open_patterns(limit=50)
+    pattern_counts = counts_by_status()
+
     ctx = _common_context(request, user)
     ctx.update({
         "pending_proposals": pending_proposals,
@@ -447,6 +452,8 @@ async def train_index(request: Request, user: User = Depends(require_user)):
         "prompt_preview": prompt_preview,
         "drafting_paused": drafting_paused.is_on(),
         "learning_curves": learning_curves,
+        "open_patterns": open_patterns,
+        "pattern_counts": pattern_counts,
         "active_tab": "train",
     })
     return templates.TemplateResponse(request, "train.html", ctx)
@@ -877,6 +884,48 @@ async def train_library_delete(
     access_log.log(
         action="library_delete",
         user_email=user.email, target=str(entry_id),
+        ip_address=client_ip(request), user_agent=client_ua(request),
+    )
+    return RedirectResponse("/train", status_code=303)
+
+
+# --- Phase 1C-2: pattern lifecycle ----------------------------------------
+
+
+@router.post("/train/patterns/{pattern_id}/dismiss")
+async def train_pattern_dismiss(
+    request: Request,
+    pattern_id: int,
+    user: User = Depends(require_user),
+):
+    from app.cognitive.pattern_miner import dismiss
+    try:
+        dismiss(pattern_id, decided_by=user.email)
+    except ValueError as e:
+        return JSONResponse({"ok": False, "error": str(e)}, status_code=404)
+    access_log.log(
+        action="pattern_dismiss",
+        user_email=user.email, target=str(pattern_id),
+        ip_address=client_ip(request), user_agent=client_ua(request),
+    )
+    return RedirectResponse("/train", status_code=303)
+
+
+@router.post("/train/patterns/{pattern_id}/promote")
+async def train_pattern_promote(
+    request: Request,
+    pattern_id: int,
+    user: User = Depends(require_user),
+):
+    from app.cognitive.pattern_miner import promote
+    try:
+        meta_rule_id = promote(pattern_id, decided_by=user.email)
+    except ValueError as e:
+        return JSONResponse({"ok": False, "error": str(e)}, status_code=400)
+    access_log.log(
+        action="pattern_promote",
+        user_email=user.email,
+        target=f"{pattern_id}->{meta_rule_id}",
         ip_address=client_ip(request), user_agent=client_ua(request),
     )
     return RedirectResponse("/train", status_code=303)

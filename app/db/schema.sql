@@ -578,6 +578,55 @@ CREATE INDEX IF NOT EXISTS idx_reflection_service ON reflection_log(service_line
 CREATE INDEX IF NOT EXISTS idx_reflection_type ON reflection_log(observation_type);
 CREATE INDEX IF NOT EXISTS idx_reflection_created ON reflection_log(created_at);
 
+-- ---------------------------------------------------------------------------
+-- patterns_log — Phase 1C-2 pattern recognition.
+--
+-- Substring-based observations the pattern_miner extracts from terminal
+-- draft journeys: when the partner consistently REMOVES or ADDS the same
+-- 3-7 word phrase across multiple edits in the same service line, that's
+-- a real pattern worth surfacing. The Train tab lists open patterns; the
+-- partner can either dismiss them or promote them into a meta_rule.
+--
+-- Status lifecycle (deliberately small — three states is enough):
+--   open       — surfaced by miner, awaiting partner judgement
+--   promoted   — partner turned it into a meta_rule (id stored)
+--   dismissed  — partner said "not a real signal" — never re-surface
+--
+-- pattern_kind:
+--   removed_phrase — n-gram present in root draft, absent from final
+--   added_phrase   — n-gram absent from root, present in final
+-- ---------------------------------------------------------------------------
+
+CREATE TABLE IF NOT EXISTS patterns_log (
+    id                       INTEGER PRIMARY KEY AUTOINCREMENT,
+    service_line             TEXT,                                 -- NULL = universal
+    pattern_kind             TEXT NOT NULL CHECK (pattern_kind IN ('removed_phrase','added_phrase')),
+    pattern_text             TEXT NOT NULL,                        -- the actual n-gram
+    occurrences              INTEGER NOT NULL DEFAULT 1,           -- # of journeys exhibiting this
+    sample_email_ids         TEXT NOT NULL DEFAULT '[]',           -- JSON array, capped at 5
+    status                   TEXT NOT NULL DEFAULT 'open'
+                             CHECK (status IN ('open','promoted','dismissed')),
+    promoted_to_meta_rule_id INTEGER REFERENCES meta_rules(id),    -- set when promoted
+    created_at               TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+    updated_at               TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+    -- Same (service_line, pattern_kind, pattern_text) tuple is a single observation
+    -- whose occurrences accumulate over time. Re-mining merges into existing rows.
+    UNIQUE (service_line, pattern_kind, pattern_text)
+);
+CREATE INDEX IF NOT EXISTS idx_patterns_status ON patterns_log(status);
+CREATE INDEX IF NOT EXISTS idx_patterns_service ON patterns_log(service_line);
+CREATE INDEX IF NOT EXISTS idx_patterns_created ON patterns_log(created_at);
+
+-- Keep patterns_log.updated_at fresh whenever occurrences/status/sample changes.
+DROP TRIGGER IF EXISTS patterns_touch_updated_at;
+CREATE TRIGGER patterns_touch_updated_at
+AFTER UPDATE ON patterns_log
+FOR EACH ROW
+WHEN NEW.updated_at = OLD.updated_at
+BEGIN
+    UPDATE patterns_log SET updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id = NEW.id;
+END;
+
 -- Append-only — block UPDATE and DELETE on access_log.
 DROP TRIGGER IF EXISTS access_log_no_update;
 CREATE TRIGGER access_log_no_update

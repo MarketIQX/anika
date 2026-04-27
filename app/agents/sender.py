@@ -156,6 +156,17 @@ async def send_approved_draft(draft_id: int, approval_id: int) -> int:
     except Exception as e:  # noqa: BLE001
         logger.warning("draft_metrics on send failed for draft %s: %s", draft_id, e)
 
+    # Phase 1C-2: mine substring patterns from this journey (non-fatal).
+    # Cheap — operates over draft bodies that already exist in memory via
+    # the metric path. Surfaces removed/added n-grams to /train when the
+    # same phrase recurs across multiple journeys.
+    try:
+        from app.cognitive.pattern_miner import mine_patterns
+
+        mine_patterns(email_id=int(row["email_id"]))
+    except Exception as e:  # noqa: BLE001
+        logger.warning("pattern_miner on send failed for draft %s: %s", draft_id, e)
+
     reasoning_log.log(
         agent_name="sender",
         input_obj={"draft_id": draft_id, "approval_id": approval_id, "test_mode": test_mode},

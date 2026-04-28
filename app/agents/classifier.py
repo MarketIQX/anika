@@ -49,6 +49,20 @@ _RECRUITMENT_PATTERNS = [
     re.compile(r"\b(?:looking|searching)\s+for\s+(?:an?\s+)?(?:opportunity|opening|vacancy|position|job)\b", re.IGNORECASE),
     re.compile(r"\bca\s+(?:inter|final|fresher)\b", re.IGNORECASE),
     re.compile(r"\b(?:experience|worked)\s+(?:at|with)\s+(?:tcs|infosys|wipro|deloitte|kpmg|pwc|ey|grant\s+thornton)", re.IGNORECASE),
+    # Production gap surfaced by draft 44 (preethinjeevan97@gmail.com):
+    # "Hello Sir, Is there any vacancies in your firm." Earlier "looking for
+    # vacancy" pattern required a verb anchor that this phrasing skipped.
+    # Also matches "any vacancy at your office", "any vacancies in your company".
+    re.compile(r"\bany\s+vacanc(?:y|ies)\s+(?:in|at)\s+your\s+(?:firm|company|office)\b", re.IGNORECASE),
+    # Direct-ask phrasings: "looking for a job in your firm",
+    # "any positions at your firm", "role with your company".
+    re.compile(r"\b(?:job|position|role)\s+(?:in|at|with)\s+your\s+(?:firm|company)\b", re.IGNORECASE),
+    # Hiring-question phrasings paired with a CA-specific anchor:
+    # "Are you hiring CA freshers?", "hiring articleship students",
+    # "hiring CS interns" (CS anchor is enough). Anchor required so the
+    # word "hiring" alone in unrelated contexts (payroll advice, etc.)
+    # doesn't trigger.
+    re.compile(r"\bhiring\b.*?\b(?:CA|CS|articleship|fresher)\b", re.IGNORECASE),
 ]
 
 

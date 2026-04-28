@@ -31,6 +31,23 @@ FIRM_NAME: str = "Balakrishna & Co."
 FIRM_PARTNER_NAME: str = "CA Prakasha"
 
 
+# Email domains owned by the firm. Inbound mail from any address at one
+# of these domains is INTERNAL correspondence (a colleague, the partner
+# himself, an internal alias) — never a client enquiry — and must be
+# filtered by the structural validator before any LLM call.
+#
+# Bug: prior to this list existing, draft 43 was generated in reply to
+# csprashant@balakrishnaandco.com — a colleague's mail — because the
+# validator had no internal-domain check. Fixed by importing FIRM_DOMAINS
+# in app/guardrails/structural_validator.py.
+#
+# Adding a new firm domain is a code change reviewed through git, same
+# discipline as SIGNATURE_BLOCK above.
+FIRM_DOMAINS: frozenset[str] = frozenset({
+    "balakrishnaandco.com",
+})
+
+
 def signature_matches(body: str) -> bool:
     """Return True if `body` ends with SIGNATURE_BLOCK verbatim (trailing
     whitespace tolerated). Used by the Sender as a last-line-of-defence

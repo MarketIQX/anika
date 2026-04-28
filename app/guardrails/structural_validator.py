@@ -2,6 +2,8 @@
 from __future__ import annotations
 import re
 
+from app.config.firm_identity import FIRM_DOMAINS
+
 
 AUTOMATION_DOMAINS = {
     "icicibank.com", "hdfcbank.net", "axisbank.com", "sbi.co.in",
@@ -82,6 +84,12 @@ def validate(*, from_email, subject, body_plain, raw_headers=None, is_web_form=F
     domain = _sender_domain(from_email)
     if domain in AUTOMATION_DOMAINS:
         return False, f"automation_domain:{domain}"
+    # Internal correspondence — colleague or partner-self mail. Never a
+    # client enquiry, so filter before any LLM call. (Web forms self-send
+    # from the firm domain too but are short-circuited at the top by
+    # the is_web_form gate.)
+    if domain in FIRM_DOMAINS:
+        return False, "internal_partner_email"
     local = _sender_local(from_email)
     if local in AUTOMATION_LOCAL_PARTS:
         return False, f"automated_local:{local}"

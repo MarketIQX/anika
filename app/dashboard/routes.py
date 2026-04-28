@@ -1295,8 +1295,9 @@ async def knowledge_graph(request: Request, user: User = Depends(require_user)):
     """Visual network of library entries showing connections via embedding similarity."""
     import json as _json
     import math
+    import struct
 
-    from app.tools import memory_tool
+    from app.db import EMBEDDING_DIM
 
     # Fetch all active entries with content
     entries = fetch_all("""
@@ -1307,14 +1308,25 @@ async def knowledge_graph(request: Request, user: User = Depends(require_user)):
     """)
     entries = [dict(e) for e in entries]
 
-    # Compute embeddings for each entry (truncated content)
-    # For efficiency, batch embed; but simplest: one call each (we have <100 entries)
+    # Read pre-computed embeddings from knowledge_library_vec instead of
+    # re-embedding on every page load. Each entry's embedding was stored
+    # at add_entry() time as packed float32 LE bytes (see
+    # app/cognitive/library.py:_pack_vector); unpack once and use. This
+    # drops the page from ~N sync OpenAI calls (~2s each → ~60s total)
+    # to a single SELECT plus in-memory unpack.
+    vec_rows = fetch_all("""
+        SELECT v.library_id AS id, v.embedding AS blob
+          FROM knowledge_library_vec v
+          JOIN knowledge_library k ON k.id = v.library_id
+         WHERE k.is_active = 1
+    """)
     embeddings = {}
-    for e in entries:
+    for r in vec_rows:
         try:
-            vec = memory_tool.embed((e["content"] or "")[:500])
-            if vec:
-                embeddings[e["id"]] = vec
+            blob = r["blob"]
+            if not blob:
+                continue
+            embeddings[r["id"]] = list(struct.unpack(f"{EMBEDDING_DIM}f", blob))
         except Exception:
             continue
 

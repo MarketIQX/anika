@@ -66,3 +66,10 @@ under `tests/` if it's verifiable code. This archive is closed for new
 admissions — its contents are immutable.
 
 April 27 (Phase 1C): added 10 more scripts from Monday's debugging.
+
+April 27–28 (Phase 1C-3): added 13 more scripts from the harvester /
+knowledge-graph / filter debugging batch. Note:
+`partner_check_now_phase1c3.py` is the evolved version of
+`partner_check_now.py` (Phase 1B) — both kept as snapshots so the
+probe's evolution (refined time buckets, pending-drafts section,
+sent-today report) is preserved per the archive's immutability contract.

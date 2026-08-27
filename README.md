@@ -1,7 +1,7 @@
-# Anika — AI email assistant for CA S. V. Prakasha
+# Anika — AI email assistant for CA 
 
 Anika is a fully agentic AI email assistant that reads every new enquiry at
-`prakasha@balakrishnaandco.com`, drafts a reply in Prakash sir's voice, and
+`email`, drafts a reply in Prakash sir's voice, and
 presents it on a web dashboard for **one-click approval**. Nothing sends
 without Prakash sir's explicit tap.
 
@@ -111,8 +111,8 @@ Anika's dashboard requires login. Two users are created on first boot:
 
 | User | Email | Role | Can see |
 |---|---|---|---|
-| AK (MarketIQX) | `aks@marketiqx.com` | `admin` | Drafts · Inbox · **Train** · **Analytics** · Settings (full) · Audit log |
-| Prakash sir | `prakasha@balakrishnaandco.com` | `user` | Drafts · Inbox · Settings (kill switch + Gmail status only) |
+| AK (MarketIQX) | `email` | `admin` | Drafts · Inbox · **Train** · **Analytics** · Settings (full) · Audit log |
+| Prakash sir | `balakrishnaandco.com` | `user` | Drafts · Inbox · Settings (kill switch + Gmail status only) |
 
 The `user` role **cannot**: open Train/Analytics/Audit, run Gmail OAuth,
 seed memory vectors, add/remove clients, view rules or firm knowledge.
@@ -134,8 +134,8 @@ it **once** to the console during startup, inside a loud banner like:
 !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
 ! INITIAL PASSWORDS (save these now, they will not be shown again)
 !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
-  admin : aks@marketiqx.com  =>  ...
-  user  : prakasha@balakrishnaandco.com  =>  ...
+  admin : 
+  user  : 
 !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
 ! Change them at once via scripts\set_password.ps1 or the login form.
 !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
@@ -287,7 +287,7 @@ verifying the pipeline without real emails going out.
 ### 6. First live test (10 min)
 
 1. Ask a colleague to send an obvious test enquiry to
-   `prakasha@balakrishnaandco.com` ("Hi, I'm an NRI looking for ITR help…").
+  email m` ("Hi, I'm an NRI looking for ITR help…").
 2. Within 30 seconds, the poller picks it up → classifier → enricher →
    drafter → Prakash sir gets an email like *"Anika: draft ready for
    approval (HOT [nri_tax])"* with a dashboard link.
@@ -303,7 +303,7 @@ drafting and sending immediately.
 **Gmail query (targeted):**
 
 ```
-from:prakasha@balakrishnaandco.com subject:"Balakrishna and Co"
+from:emailsubject:"Balakrishna and Co"
   is:unread -label:Anika/Processed newer_than:7d
 ```
 
